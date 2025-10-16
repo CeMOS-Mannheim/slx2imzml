@@ -7,7 +7,7 @@ centroid and profile spectrum modes, and exports additional data as NRRD files.
 
 Author: Jonas Cordes
 Email: j.cordes@th-mannheim.de
-Institution: Hochschule Mannheim
+Institution: TH Mannheim
 """
 
 import sys

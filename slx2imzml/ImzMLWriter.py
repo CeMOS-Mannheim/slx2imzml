@@ -10,7 +10,7 @@ and is compatible with various analysis tools including M²aia.
 
 Author: Jonas Cordes
 Email: j.cordes@th-mannheim.de
-Institution: Hochschule Mannheim
+Institution: TH Mannheim
 """
 
 import numpy as np

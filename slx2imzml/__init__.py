@@ -19,7 +19,7 @@ Main Function:
 
 Author: Jonas Cordes
 Email: j.cordes@th-mannheim.de  
-Institution: Hochschule Mannheim
+Institution: TH Mannheim
 
 Example:
     $ slx2imzml export_config.json
