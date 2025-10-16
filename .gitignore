@@ -1,0 +1,13 @@
+/Thumbs.db
+/VIEWME.excalidraw.png
+/dist
+/*.egg-info
+/build
+slx2imzml/__pycache__/__init__.cpython-310.pyc
+slx2imzml/__pycache__/__init__.cpython-313.pyc
+slx2imzml/__pycache__/ImzMLIO.cpython-310.pyc
+slx2imzml/__pycache__/ImzMLIO.cpython-313.pyc
+slx2imzml/__pycache__/ImzMLWriter.cpython-310.pyc
+slx2imzml/__pycache__/ImzMLWriter.cpython-313.pyc
+slx2imzml/__pycache__/ScilsLabFileHelper.cpython-310.pyc
+slx2imzml/__pycache__/ScilsLabFileHelper.cpython-313.pyc

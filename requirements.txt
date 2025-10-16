@@ -1,0 +1,8 @@
+# Core dependencies for imzmlio package
+numpy
+pandas
+jinja2
+matplotlib
+SimpleITK
+
+#scilslab (follow vendor instructions)

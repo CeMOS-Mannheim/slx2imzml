@@ -1,0 +1,38 @@
+# Include the README file
+include README.md
+
+# Include the license file (if it exists)
+include LICENSE*
+
+# Include the requirements file (if it exists)
+include requirements*.txt
+
+# Include package data files
+recursive-include slx2imzml *.j2
+recursive-include slx2imzml *.py
+
+# Include documentation files
+include *.md
+include *.rst
+include *.txt
+
+# Include the Excalidraw diagram
+include VIEWME.excalidraw.png
+
+# Exclude build artifacts and cache files
+global-exclude __pycache__/*
+global-exclude *.py[co]
+global-exclude .git*
+global-exclude *.so
+global-exclude .DS_Store
+global-exclude Thumbs.db
+
+# Exclude build directories
+prune build/
+prune dist/
+prune *.egg-info/
+
+# Exclude IDE and editor files
+global-exclude .vscode/
+global-exclude *.code-workspace
+global-exclude .idea/

@@ -1,0 +1,122 @@
+{#
+imzMLTemplate.j2 - Jinja2 template for generating imzML XML files
+
+This template generates compliant imzML XML files for mass spectrometry imaging data.
+The imzML format consists of an XML metadata file (.imzML) and a binary data file (.ibd).
+
+Template Variables:
+- spectrum_type_code, spectrum_type: MS ontology terms for spectrum type (centroid/profile)
+- spectrum_mode_code, spectrum_mode: MS ontology terms for spectrum mode (continuous/processed)  
+- uuid: Universally unique identifier linking XML and binary data
+- sha1sum: SHA-1 hash of binary data for integrity verification
+- mz_data_type_code, mz_data_type: Data type for m/z values (e.g., 32-bit float)
+- int_data_type_code, int_data_type: Data type for intensity values
+- mz_compression_code, int_compression_code: Compression settings (typically no compression)
+- size_x, size_y: Image dimensions in pixels
+- max_dimension_x, max_dimension_y: Physical image size in micrometers
+- pixel_size_x, pixel_size_y: Pixel spacing in micrometers
+- origin_x, origin_y: Spatial offset coordinates in micrometers
+- run_id: Experiment run identifier
+- num_spectra: Total number of spectra in the dataset
+- spectra: List of spectrum metadata objects with position and data offset information
+
+Author: Jonas Cordes, Hochschule Mannheim
+Compatible with: imzML specification 1.1.0, M²aia software
+#}
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<mzML xmlns="http://psi.hupo.org/ms/mzml"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://psi.hupo.org/ms/mzml http://psidev.info/files/ms/mzML/xsd/mzML1.1.0_idx.xsd"
+      version="1.1">
+  {# Controlled vocabulary definitions required by imzML standard #}
+  <cvList count="3">
+    <cv id="MS" fullName="Proteomics Standards Initiative Mass Spectrometry Ontology" version="1.3.1" URI="http://psidev.info/ms/mzML/psi-ms.obo"/>
+    <cv id="UO" fullName="Unit Ontology" version="1.15" URI="http://obo.cvs.sourceforge.net/obo/obo/ontology/phenotype/unit.obo"/>
+    <cv id="IMS" fullName="Imaging MS Ontology" version="0.9.1" URI="http://www.maldi-msi.org/download/imzml/imagingMS.obo"/>
+  </cvList>
+  {# File description: data type, UUID, and binary file integrity hash #}
+  <fileDescription>
+    <fileContent>
+      <cvParam cvRef="MS" accession="MS:1000294" name="mass spectrum" value=""/>
+      <cvParam cvRef="MS" accession="MS:{{ spectrum_type_code }}" name="{{ spectrum_type }}" value=""/>
+      <cvParam cvRef="IMS" accession="IMS:{{ spectrum_mode_code }}" name="{{ spectrum_mode }}" value=""/>
+      <cvParam cvRef="IMS" accession="IMS:1000080" name="universally unique identifier" value="{{ uuid }}"/>
+      <cvParam cvRef="IMS" accession="IMS:1000091" name="ibd SHA-1" value="{{ sha1sum }}"/>
+    </fileContent>
+  </fileDescription>
+  <referenceableParamGroupList count="3">
+    <referenceableParamGroup id="spectrum">
+      <cvParam cvRef="MS" accession="MS:1000294" name="mass spectrum" value=""/>
+      <cvParam cvRef="MS" accession="MS:{{ spectrum_type_code }}" name="{{ spectrum_type }}" value=""/>
+      {% if polarity %}<cvParam cvRef="MS" accession="MS:{{ polarity_code }}" name="{{ polarity }}" value=""/>{% endif %}
+    </referenceableParamGroup>
+    <referenceableParamGroup id="mzArray">
+      <cvParam cvRef="MS" accession="MS:1000514" name="m/z array" value=""/>
+      <cvParam cvRef="MS" accession="MS:{{ mz_data_type_code }}" name="{{ mz_data_type }}" value=""/>
+      <cvParam cvRef="MS" accession="MS:{{ mz_compression_code }}" name="{{ mz_compression }}" value=""/>
+      <cvParam cvRef="IMS" accession="IMS:1000101" name="external data" value="true"/>
+    </referenceableParamGroup>
+    <referenceableParamGroup id="intensityArray">
+      <cvParam cvRef="MS" accession="MS:1000515" name="intensity array" value=""/>
+      <cvParam cvRef="MS" accession="MS:{{ int_data_type_code }}" name="{{ int_data_type }}" value=""/>
+      <cvParam cvRef="MS" accession="MS:{{ int_compression_code }}" name="{{ int_compression }}" value=""/>
+      <cvParam cvRef="IMS" accession="IMS:1000101" name="external data" value="true"/>
+    </referenceableParamGroup>
+  </referenceableParamGroupList>
+  <scanSettingsList count="1">
+    <scanSettings id="scanSettings1">
+      <cvParam cvRef="IMS" accession="IMS:1000042" name="max count of pixels x" value="{{ size_x }}"/>
+      <cvParam cvRef="IMS" accession="IMS:1000043" name="max count of pixels y" value="{{ size_y }}"/>
+      <cvParam cvRef="IMS" accession="IMS:1000044" name="max dimension x" value="{{ max_dimension_x }}" unitCvRef="UO" unitAccession="UO:0000017" unitName="micrometer"/>
+      <cvParam cvRef="IMS" accession="IMS:1000045" name="max dimension y" value="{{ max_dimension_y }}" unitCvRef="UO" unitAccession="UO:0000017" unitName="micrometer"/>
+      <cvParam cvRef="IMS" accession="IMS:1000046" name="pixel size x" value="{{ pixel_size_x }}" unitCvRef="UO" unitAccession="UO:0000017" unitName="micrometer"/>
+      <cvParam cvRef="IMS" accession="IMS:1000047" name="pixel size y" value="{{ pixel_size_y }}" unitCvRef="UO" unitAccession="UO:0000017" unitName="micrometer"/>
+      <cvParam cvRef="IMS" accession="IMS:1000053" name="absolute position offset x" value="{{ origin_x }}" unitCvRef="UO" unitAccession="UO:0000017" unitName="micrometer"/>
+      <cvParam cvRef="IMS" accession="IMS:1000054" name="absolute position offset y" value="{{ origin_y }}" unitCvRef="UO" unitAccession="UO:0000017" unitName="micrometer"/>
+    </scanSettings>
+  </scanSettingsList>
+  <instrumentConfigurationList count="1">
+    <instrumentConfiguration id="IC1">
+      <cvParam cvRef="MS" accession="MS:1000031" name="Unknown" value=""/>
+      <cvParam cvRef="MS" accession="MS:1000463" name="Unknown" value=""/>
+    </instrumentConfiguration>
+  </instrumentConfigurationList>
+  <run defaultInstrumentConfigurationRef="IC1" id="Experiment{{ run_id }}">
+    <spectrumList count="{{ num_spectra }}" defaultDataProcessingRef="M2aiaProcessing">
+      {% for spectrum in spectra %}
+      <spectrum defaultArrayLength="0" id="spectrum={{ spectrum.index }}" index="{{ spectrum.index }}">
+        <referenceableParamGroupRef ref="spectrum"/>
+        {% if spectrum.tic %}
+        <cvParam accession="MS:1000285" cvRef="MS" name="total ion current" value="{{ spectrum.tic }}"/>
+        {% endif %}
+        <scanList count="1">
+          <cvParam cvRef="MS" accession="MS:1000795" name="no combination" value=""/>
+          <scan instrumentConfigurationRef="IC1">
+            <cvParam accession="IMS:1000050" cvRef="IMS" name="position x" value="{{ spectrum.x }}"/>
+            <cvParam accession="IMS:1000051" cvRef="IMS" name="position y" value="{{ spectrum.y }}"/>
+            {% if spectrum.z %}
+            <cvParam accession="IMS:1000052" cvRef="IMS" name="position z" value="{{ spectrum.z }}"/>
+            {% endif %}
+          </scan>
+        </scanList>
+        <binaryDataArrayList count="2">
+          <binaryDataArray encodedLength="0">
+            <referenceableParamGroupRef ref="mzArray"/>
+            <cvParam accession="IMS:1000103" cvRef="IMS" name="external array length" value="{{ spectrum.mz_len }}"/>
+            <cvParam accession="IMS:1000104" cvRef="IMS" name="external encoded length" value="{{ spectrum.mz_enc_len }}"/>
+            <cvParam accession="IMS:1000102" cvRef="IMS" name="external offset" value="{{ spectrum.mz_offset }}"/>
+            <binary/>
+          </binaryDataArray>
+          <binaryDataArray encodedLength="0">
+            <referenceableParamGroupRef ref="intensityArray"/>
+            <cvParam accession="IMS:1000103" cvRef="IMS" name="external array length" value="{{ spectrum.int_len }}"/>
+            <cvParam accession="IMS:1000104" cvRef="IMS" name="external encoded length" value="{{ spectrum.int_enc_len }}"/>
+            <cvParam accession="IMS:1000102" cvRef="IMS" name="external offset" value="{{ spectrum.int_offset }}"/>
+            <binary/>
+          </binaryDataArray>
+        </binaryDataArrayList>
+      </spectrum>
+    {% endfor %}
+    </spectrumList>
+  </run>
+</mzML>
