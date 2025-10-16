@@ -12,7 +12,7 @@ setup(
         "jinja2",
         "matplotlib",
         "SimpleITK",
-        # "scilslab"
+        # "scilslab" 
     ],
     entry_points={
         "console_scripts": [
@@ -24,7 +24,7 @@ setup(
     },
     author="Jonas Cordes",
     author_email="j.cordes@th-mannheim.de",
-    description="A package to read a properitary scils file and write regions as open accessible imzML files (compatible with M²aia).",
+    description="A package to read a proprietary scils file and write regions as open accessible imzML files (compatible with M²aia).",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/CeMOS-Mannheim/slx2imzml",

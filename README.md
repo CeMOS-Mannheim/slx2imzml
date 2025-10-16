@@ -45,7 +45,7 @@ The package automatically installs the following dependencies:
 ### Command Line Interface
 
 ```bash
-imzmlio export_instructions.json
+slx2imzml export_instructions.json
 ```
 
 ### Export Instructions Format
