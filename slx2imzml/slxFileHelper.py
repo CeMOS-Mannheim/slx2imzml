@@ -475,7 +475,7 @@ class slxFileHelper:
                 
                 
                 # Process regions matching the query criteria
-                match_regions_by_name = ScilsLabFileHelper._match_regions_by_name
+                match_regions_by_name = slxFileHelper._match_regions_by_name
                 all_regions = region_tree.get_all_regions()
 
                 slx_context["final_regions"] = [
