@@ -198,6 +198,7 @@ class slxFileHelper:
         ds = dataset.get_spectrum(0, rebinned=True)
         
         xs = ds['mz']
+        ys = ds['intensities']
         
         # print(I.values.shape, xs)
         
@@ -328,10 +329,19 @@ class slxFileHelper:
         
         spot_image_list = []
         for s_name, s_id in spot_images:
+            print(f"Loading spot image: {s_name} (ID: {s_id}) for region: {r_name} (ID: {r_id})")
             spot_image = dataset.get_spot_image(s_id)
             # Create spatial array matching the region dimensions
             spatial_array = np.zeros(index_image.values.shape[:3])
             spatial_array[mask_foreground] = spot_image.values[mask_indices]
+            
+            if "Total Ion Count" in s_name:
+                s_name = "TIC"
+                # from factor to absolute values 
+                spatial_array = spatial_array * dataset.get_mean_spectrum()['intensities'].sum()
+                
+            if "Root Mean Square" in s_name:
+                s_name = "RMS"
             
             # Convert to SimpleITK image
             sitk_image = sitk.GetImageFromArray(spatial_array[..., np.newaxis].T)
@@ -456,7 +466,7 @@ class slxFileHelper:
                 df: pd.DataFrame = dataset.optical_images.get_ids()
                 optical_images = []
                 for i, row in df.iterrows():
-                    if not row["has_external_image"]:
+                    if row["has_external_image"] == False:
                         optical_images.append([row["name"], row["id"]],)
                     
                 if slx_context["optical_images"] is not None and len(slx_context["optical_images"]) > 0:

@@ -7,7 +7,7 @@ centroid and profile spectrum modes, and exports additional data as NRRD files.
 
 Author: Jonas Cordes
 Email: j.cordes@th-mannheim.de
-Institution: TH Mannheim
+Institution: Hochschule Mannheim
 """
 
 import sys
@@ -107,16 +107,26 @@ def main():
 
                 def set_image_properties(image: sitk.Image) -> sitk.Image:
                     """
-                    Set spatial properties for SimpleITK images.
+                    Set spatial properties for SimpleITK images and flip x/y axes.
                     
                     Args:
                         image: SimpleITK image to configure
                         
                     Returns:
-                        sitk.Image: Configured image with spatial properties
+                        sitk.Image: Configured image with spatial properties and flipped axes
                     """
-                    image.SetOrigin(origin.tolist())
-                    image.SetSpacing(spacing.tolist())
+                    # Flip x and y axes by permuting dimensions [1, 0, 2, 3]
+                    # This swaps the first two dimensions (x and y) while keeping z and channel dimensions
+                    array = sitk.GetArrayFromImage(image)
+                    flipped_array = np.transpose(array, (0, 2, 1))
+                    image = sitk.GetImageFromArray(flipped_array)
+                    
+                    # Set origin and spacing with x and y swapped
+                    flipped_origin = [origin[1], origin[0], origin[2]]
+                    flipped_spacing = [spacing[1], spacing[0], spacing[2]]
+                    
+                    image.SetOrigin(flipped_origin)
+                    image.SetSpacing(flipped_spacing)
                     return image
                 
                 # Export region masks as multi-label NRRD image
@@ -124,10 +134,21 @@ def main():
                     rlImage = slxFileHelper.load_regions_as_labels(
                         dataset, r_id, final_regions_as_labels, slice_thickness
                     )
-                    set_image_properties(rlImage)
+                    oi = set_image_properties(rlImage)
                     mask_path = f"{str(filename_without_extension / r_name)}.mask.nrrd"
-                    sitk.WriteImage(rlImage, mask_path)
+                    sitk.WriteImage(oi, mask_path)
                     print(f"Exported region mask: {mask_path}")
+
+                # Export raw data normalization maps as NRRD
+                # TIC, RMS, etc.
+                # norm_maps = ScilsLabFileHelper.compute_normalization_maps(dataset, r_name, r_id)
+                # for norm_name, norm_image in norm_maps.items():
+                #     normalized_name = ScilsLabFileHelper.normalize(norm_name)
+                #     oi = set_image_properties(norm_image)
+                #     norm_path = f"{str(filename_without_extension / r_name)}.{normalized_name}.nrrd"
+                #     sitk.WriteImage(oi, norm_path)
+                #     print(f"Exported normalization map: {norm_path}")
+
 
                 # Export spot images (normalizations, etc.)
                 if final_spot_images:
@@ -137,9 +158,9 @@ def main():
                     )
                     for name, image in sImages:
                         normalized_name = slxFileHelper.normalize(name)
-                        set_image_properties(image)
+                        oi = set_image_properties(image)
                         spot_path = f"{str(filename_without_extension / r_name)}.{normalized_name}.nrrd"
-                        sitk.WriteImage(image, spot_path)
+                        sitk.WriteImage(oi, spot_path)
                         print(f"Exported spot image: {spot_path}")
                 
                 # Export optical images
@@ -148,11 +169,12 @@ def main():
                     oImages = slxFileHelper.load_optical_image(
                         dataset, r_name, r_id, final_optical_images, slice_thickness
                     )
+                    
                     for name, image in oImages:
                         normalized_name = slxFileHelper.normalize(name)
-                        set_image_properties(image)
+                        oi = set_image_properties(image)
                         optical_path = f"{str(filename_without_extension / r_name)}.{normalized_name}.nrrd"
-                        sitk.WriteImage(image, optical_path)
+                        sitk.WriteImage(oi, optical_path)
                         print(f"Exported optical image: {optical_path}")
 
                 # Export mass spectrometry data as imzML

@@ -140,11 +140,11 @@ class ImzMLWriter:
                 # Write intensity values for this pixel
                 int_offset, int_len, int_len_enc = ImzMLWriter._encode_and_write(ibd_file, data[x, y, z], dtype=np.float32)
                 
-                # Store metadata for this spectrum
+                # Store metadata for this spectrum (x and y are flipped)
                 list_of_spectra_info.append({
                     "index": i + 1,
-                    "x": x + 1,
-                    "y": y + 1,
+                    "x": y + 1,
+                    "y": x + 1,
                     "z": z + 1,
                     "mz_offset": mz_offset,
                     "mz_len": mz_len,
@@ -245,24 +245,24 @@ class ImzMLWriter:
         spacing_mu = spacing * 1000
         origin_mu = origin * 1000
         
-        # Set image dimensions
-        self.context["size_x"] = int(spectral_data.shape[0])
-        self.context["size_y"] = int(spectral_data.shape[1])
+        # Set image dimensions (x and y are flipped)
+        self.context["size_x"] = int(spectral_data.shape[1])
+        self.context["size_y"] = int(spectral_data.shape[0])
         self.context["size_z"] = int(spectral_data.shape[2])
 
-        # Set pixel spacing in micrometers
-        self.context["pixel_size_x"] = spacing_mu[0]
-        self.context["pixel_size_y"] = spacing_mu[1]
+        # Set pixel spacing in micrometers (x and y are flipped)
+        self.context["pixel_size_x"] = spacing_mu[1]
+        self.context["pixel_size_y"] = spacing_mu[0]
         self.context["pixel_size_z"] = spacing_mu[2]
 
-        # Set maximum dimensions in micrometers
-        self.context["max_dimension_x"] = spectral_data.shape[0] * spacing_mu[0]
-        self.context["max_dimension_y"] = spectral_data.shape[1] * spacing_mu[1]
+        # Set maximum dimensions in micrometers (x and y are flipped)
+        self.context["max_dimension_x"] = spectral_data.shape[1] * spacing_mu[1]
+        self.context["max_dimension_y"] = spectral_data.shape[0] * spacing_mu[0]
         self.context["max_dimension_z"] = spectral_data.shape[2] * spacing_mu[2]
 
-        # Set origin coordinates in micrometers
-        self.context["origin_x"] = origin_mu[0]
-        self.context["origin_y"] = origin_mu[1]
+        # Set origin coordinates in micrometers (x and y are flipped)
+        self.context["origin_x"] = origin_mu[1]
+        self.context["origin_y"] = origin_mu[0]
         self.context["origin_z"] = origin_mu[2]
 
         # Set run information
