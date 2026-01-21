@@ -10,3 +10,4 @@ tibble
 readr
 SCiLSLabClient
 jsonlite
+gridlayout
