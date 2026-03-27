@@ -4,6 +4,7 @@ pandas
 jinja2
 matplotlib
 SimpleITK
+Pillow
 
 #scilslab (follow vendor instructions)
 

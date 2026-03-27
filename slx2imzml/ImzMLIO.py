@@ -88,6 +88,20 @@ def main():
             dataset = helper.get_dataset_proxy(slx_file)
             filename_without_extension = pathlib.Path(filename.replace(".slx", ""))
 
+            # Export optical images
+            if final_optical_images:
+                print("Processing optical images...")
+                oImages = slxFileHelper.load_optical_image(
+                    dataset, final_optical_images, slice_thickness
+                )
+                
+                for name, image in oImages:
+                    normalized_name = slxFileHelper.normalize(name)
+                    # oi = set_image_properties(image)
+                    optical_path = f"{str(filename_without_extension)}/{normalized_name}.nrrd"
+                    sitk.WriteImage(image, optical_path)
+                    print(f"Exported optical image: {optical_path}")
+
             # Process each region specified in the configuration
             for r_name, r_id in final_regions:
                 print(f"## Processing region: {r_name}")
@@ -97,36 +111,39 @@ def main():
 
                 # Extract spatial transformation information from the region
                 transformation = dataset.get_index_images(r_id)[0].transformation
-                spacing = slxFileHelper.get_pixel_spacing_3D_mm(transformation, slice_thickness)
-                direction = slxFileHelper.get_direction_matrix(transformation, slice_thickness)
-                origin = slxFileHelper.get_origin_mm(transformation)
+                spacing, origin, direction = slxFileHelper.get_geometry_from_transformation(
+                    transformation, slice_thickness
+                )
                 
                 print(f"Pixel spacing: {spacing}")
                 print(f"Origin: {origin}")
                 print(f"Direction matrix: {direction}")
 
-                def set_image_properties(image: sitk.Image) -> sitk.Image:
+                def set_image_properties(image: sitk.Image, transpose_xy: bool = False) -> sitk.Image:
                     """
-                    Set spatial properties for SimpleITK images and flip x/y axes.
+                    Set spatial properties for region-based images.
                     
                     Args:
                         image: SimpleITK image to configure
+                        transpose_xy: Whether to transpose x/y before writing
                         
                     Returns:
-                        sitk.Image: Configured image with spatial properties and flipped axes
+                        sitk.Image: Configured image with spatial properties
                     """
-                    # Flip x and y axes by permuting dimensions [1, 0, 2, 3]
-                    # This swaps the first two dimensions (x and y) while keeping z and channel dimensions
-                    array = sitk.GetArrayFromImage(image)
-                    flipped_array = np.transpose(array, (0, 2, 1))
-                    image = sitk.GetImageFromArray(flipped_array)
                     
-                    # Set origin and spacing with x and y swapped
-                    flipped_origin = [origin[1], origin[0], origin[2]]
-                    flipped_spacing = [spacing[1], spacing[0], spacing[2]]
+                    local_spacing = spacing
+                    local_direction = direction
                     
-                    image.SetOrigin(flipped_origin)
-                    image.SetSpacing(flipped_spacing)
+                    if transpose_xy:
+                        array = sitk.GetArrayFromImage(image)
+                        image = sitk.GetImageFromArray(np.transpose(array, (0, 2, 1)))
+                        local_spacing = np.array([spacing[1], spacing[0], spacing[2]])
+                        # local_direction = direction[:, [1, 0, 2]]
+                    
+
+                    image.SetOrigin(origin.tolist())
+                    image.SetSpacing(local_spacing.tolist())
+                    image.SetDirection(local_direction.reshape(-1).tolist())
                     return image
                 
                 # Export region masks as multi-label NRRD image
@@ -134,7 +151,7 @@ def main():
                     rlImage = slxFileHelper.load_regions_as_labels(
                         dataset, r_id, final_regions_as_labels, slice_thickness
                     )
-                    oi = set_image_properties(rlImage)
+                    oi = set_image_properties(rlImage, transpose_xy=True)
                     mask_path = f"{str(filename_without_extension / r_name)}.mask.nrrd"
                     sitk.WriteImage(oi, mask_path)
                     print(f"Exported region mask: {mask_path}")
@@ -158,24 +175,12 @@ def main():
                     )
                     for name, image in sImages:
                         normalized_name = slxFileHelper.normalize(name)
-                        oi = set_image_properties(image)
+                        oi = set_image_properties(image, transpose_xy=True)
                         spot_path = f"{str(filename_without_extension / r_name)}.{normalized_name}.nrrd"
                         sitk.WriteImage(oi, spot_path)
                         print(f"Exported spot image: {spot_path}")
                 
-                # Export optical images
-                if final_optical_images:
-                    print("Processing optical images...")
-                    oImages = slxFileHelper.load_optical_image(
-                        dataset, r_name, r_id, final_optical_images, slice_thickness
-                    )
-                    
-                    for name, image in oImages:
-                        normalized_name = slxFileHelper.normalize(name)
-                        oi = set_image_properties(image)
-                        optical_path = f"{str(filename_without_extension / r_name)}.{normalized_name}.nrrd"
-                        sitk.WriteImage(oi, optical_path)
-                        print(f"Exported optical image: {optical_path}")
+               
 
                 # Export mass spectrometry data as imzML
                 print("Exporting imzML data...")
