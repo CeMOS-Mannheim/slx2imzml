@@ -244,26 +244,32 @@ class ImzMLWriter:
         # Convert from millimeters to micrometers (imzML standard unit)
         spacing_mu = spacing * 1000
         origin_mu = origin * 1000
+        direction = np.asarray(direction, dtype=np.float64).reshape(3, 3)
         
         # Set image dimensions (x and y are flipped)
-        self.context["size_x"] = int(spectral_data.shape[1])
-        self.context["size_y"] = int(spectral_data.shape[0])
+        self.context["size_x"] = int(spectral_data.shape[0])
+        self.context["size_y"] = int(spectral_data.shape[1])
         self.context["size_z"] = int(spectral_data.shape[2])
 
         # Set pixel spacing in micrometers (x and y are flipped)
-        self.context["pixel_size_x"] = spacing_mu[1]
-        self.context["pixel_size_y"] = spacing_mu[0]
+        self.context["pixel_size_x"] = spacing_mu[0]
+        self.context["pixel_size_y"] = spacing_mu[1]
         self.context["pixel_size_z"] = spacing_mu[2]
 
         # Set maximum dimensions in micrometers (x and y are flipped)
-        self.context["max_dimension_x"] = spectral_data.shape[1] * spacing_mu[1]
-        self.context["max_dimension_y"] = spectral_data.shape[0] * spacing_mu[0]
+        self.context["max_dimension_x"] = spectral_data.shape[0] * spacing_mu[0]
+        self.context["max_dimension_y"] = spectral_data.shape[1] * spacing_mu[1]
         self.context["max_dimension_z"] = spectral_data.shape[2] * spacing_mu[2]
 
-        # Set origin coordinates in micrometers (x and y are flipped)
-        self.context["origin_x"] = origin_mu[1]
-        self.context["origin_y"] = origin_mu[0]
+        # Keep world origin coordinates unchanged; only pixel index axes are flipped.
+        self.context["origin_x"] = origin_mu[0]
+        self.context["origin_y"] = origin_mu[1]
         self.context["origin_z"] = origin_mu[2]
+
+        # Store direction matrix as a single space-separated row-major string.
+        self.context["direction_matrix"] = " ".join(
+            f"{v:.12g}" for v in direction.reshape(-1)
+        )
 
         # Set run information
         self.context["run_id"] = "0"

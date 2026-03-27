@@ -73,6 +73,7 @@ Compatible with: imzML specification 1.1.0, M²aia software
       <cvParam cvRef="IMS" accession="IMS:1000047" name="pixel size y" value="{{ pixel_size_y }}" unitCvRef="UO" unitAccession="UO:0000017" unitName="micrometer"/>
       <cvParam cvRef="IMS" accession="IMS:1000053" name="absolute position offset x" value="{{ origin_x }}" unitCvRef="UO" unitAccession="UO:0000017" unitName="micrometer"/>
       <cvParam cvRef="IMS" accession="IMS:1000054" name="absolute position offset y" value="{{ origin_y }}" unitCvRef="UO" unitAccession="UO:0000017" unitName="micrometer"/>
+      {% if direction_matrix %}<userParam name="direction matrix" value="{{ direction_matrix }}" type="xsd:string"/>{% endif %}
     </scanSettings>
   </scanSettingsList>
   <instrumentConfigurationList count="1">
