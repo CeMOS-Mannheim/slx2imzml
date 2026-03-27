@@ -12,6 +12,7 @@ setup(
         "jinja2",
         "matplotlib",
         "SimpleITK",
+        "Pillow",
         # "scilslab" 
     ],
     entry_points={
