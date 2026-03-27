@@ -7,4 +7,7 @@ slx2imzml/__pycache__
 .RData
 .Rhistory
 gui/install_R_dependencies.R
+scilslab-8.1.123-cp312-cp312-win_amd64.whl
 
+.Rproj.user
+.venv

@@ -1,0 +1,22 @@
+[
+    {
+        "key": "ctrl+enter",
+        "command": "r.runSelection",
+        "when": "editorTextFocus && editorLangId == r"
+    },
+    {
+        "key": "ctrl+shift+enter",
+        "command": "r.sourceWithEcho",
+        "when": "editorTextFocus && editorLangId == r"
+    },
+    {
+        "key": "f1",
+        "command": "r.showHelp",
+        "when": "editorTextFocus && editorLangId == r"
+    },
+    {
+        "key": "f2",
+        "command": "editor.action.goToDefinition",
+        "when": "editorTextFocus && editorLangId == r"
+    }
+]

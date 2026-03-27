@@ -1,0 +1,38 @@
+{
+    "python.defaultInterpreterPath": "d:\\slx2imzml\\.venv\\Scripts\\python.exe",
+    "python.linting.enabled": true,
+    "python.linting.pylintEnabled": false,
+    "python.terminal.activateEnvironment": false,
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
+    "terminal.integrated.profiles.windows": {
+        "PowerShell": {
+            "source": "PowerShell",
+            "icon": "terminal-powershell",
+            "args": ["-NoExit", "-Command", "& d:\\slx2imzml\\.venv\\Scripts\\Activate.ps1"]
+        },
+        "R Terminal": {
+            "path": "C:\\Program Files\\R\\R-4.5.1\\bin\\R.exe",
+            "args": ["--no-save", "--no-restore"],
+            "icon": "terminal-bash"
+        }
+    },
+    "r.rterm.windows": "C:\\Program Files\\R\\R-4.5.1\\bin\\R.exe",
+    "r.lsp.path": "C:\\Program Files\\R\\R-4.5.1\\bin\\R.exe",
+    "r.lsp.debug": false,
+    "r.lsp.diagnostics": true,
+    "r.bracketedPaste": true,
+    "r.plot.useHttpgd": true,
+    "r.session.viewers.viewColumn": {
+        "plot": "Active",
+        "browser": "Active",
+        "viewer": "Active",
+        "pageViewer": "Active",
+        "view": "Active",
+        "helpPanel": "Active"
+    },
+    "[r]": {
+        "editor.defaultFormatter": "Yuki-Ueda.r",
+        "editor.formatOnSave": false,
+        "editor.codeActionsOnSave": []
+    }
+}

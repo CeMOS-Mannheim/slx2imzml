@@ -6,3 +6,7 @@ matplotlib
 SimpleITK
 
 #scilslab (follow vendor instructions)
+
+# GUI dependencies
+shiny
+faicons

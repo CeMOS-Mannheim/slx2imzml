@@ -1,0 +1,6 @@
+shiny
+faicons
+pandas
+numpy
+SimpleITK
+scilslab

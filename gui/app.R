@@ -101,9 +101,15 @@ server <- function(input, output, session) {
   )
   disable("btnProcess")
 
-  volumes <- getVolumes()
-  shinyFileChoose(input, "slxPath", root = volumes, filetypes = c("", "slx"))
-
+  volumes <- c(C = "C:/", D = "D:/", Home = "~") 
+  
+  shinyFileChoose(
+    input, 
+    "slxPath", 
+    roots = volumes, 
+    filetypes = c("slx"), 
+    session = session
+  )
   # get regions and feature lists after path was set by user
   observeEvent(input$slxPath, {
     if (!is.integer(input$slxPath)) {
