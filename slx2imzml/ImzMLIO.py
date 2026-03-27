@@ -88,6 +88,20 @@ def main():
             dataset = helper.get_dataset_proxy(slx_file)
             filename_without_extension = pathlib.Path(filename.replace(".slx", ""))
 
+            # Export optical images
+            if final_optical_images:
+                print("Processing optical images...")
+                oImages = slxFileHelper.load_optical_image(
+                    dataset, final_optical_images, slice_thickness
+                )
+                
+                for name, image in oImages:
+                    normalized_name = slxFileHelper.normalize(name)
+                    # oi = set_image_properties(image)
+                    optical_path = f"{str(filename_without_extension)}/{normalized_name}.nrrd"
+                    sitk.WriteImage(image, optical_path)
+                    print(f"Exported optical image: {optical_path}")
+
             # Process each region specified in the configuration
             for r_name, r_id in final_regions:
                 print(f"## Processing region: {r_name}")
@@ -166,19 +180,7 @@ def main():
                         sitk.WriteImage(oi, spot_path)
                         print(f"Exported spot image: {spot_path}")
                 
-                # Export optical images
-                if final_optical_images:
-                    print("Processing optical images...")
-                    oImages = slxFileHelper.load_optical_image(
-                        dataset, r_name, r_id, final_optical_images, slice_thickness
-                    )
-                    
-                    for name, image in oImages:
-                        normalized_name = slxFileHelper.normalize(name)
-                        # oi = set_image_properties(image)
-                        optical_path = f"{str(filename_without_extension / r_name)}.{normalized_name}.nrrd"
-                        sitk.WriteImage(image, optical_path)
-                        print(f"Exported optical image: {optical_path}")
+               
 
                 # Export mass spectrometry data as imzML
                 print("Exporting imzML data...")

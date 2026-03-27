@@ -389,7 +389,7 @@ class slxFileHelper:
         return spot_image_list
     
     @staticmethod
-    def load_optical_image(dataset: sl.DatasetProxy, r_name: str, r_id: int, optical_images: list, slice_thickness: float) -> list:
+    def load_optical_image(dataset: sl.DatasetProxy, optical_images: list, slice_thickness: float) -> list:
         """
         Load optical images associated with a region.
         
@@ -398,8 +398,6 @@ class slxFileHelper:
         
         Args:
             dataset: SCiLS Lab dataset proxy
-            r_name: Name of the region (for logging)
-            r_id: ID of the region (currently unused)
             optical_images: List of [name, id] pairs for optical images to load
             slice_thickness: Z-axis slice thickness (currently unused)
             
