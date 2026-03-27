@@ -1,4 +1,6 @@
 # setup.py
+from pathlib import Path
+
 from setuptools import setup, find_packages
 
 setup(
@@ -13,11 +15,13 @@ setup(
         "matplotlib",
         "SimpleITK",
         "Pillow",
+        "shiny",
+        "faicons",
         # "scilslab" 
     ],
     entry_points={
         "console_scripts": [
-            "slx2imzml=slx2imzml:main",
+            "slx2imzml-gui=slx2imzml_gui.launcher:main",
         ],
     },
     package_data={
@@ -26,7 +30,7 @@ setup(
     author="Jonas Cordes",
     author_email="j.cordes@th-mannheim.de",
     description="Convert SCiLS Lab (.slx) files to open-standard imzML files (compatible with M²aia).",
-    long_description=open("README.md").read(),
+    long_description=Path("README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/CeMOS-Mannheim/slx2imzml",
     classifiers=[
