@@ -21,6 +21,8 @@ import numpy as np
 import SimpleITK as sitk
 import re
 from collections import Counter
+from PIL import Image
+import io
 
 
 class slxFileHelper:
@@ -133,6 +135,48 @@ class slxFileHelper:
     
 
     @staticmethod
+    def _get_geometry_from_px2world(px2world: np.ndarray, slice_thickness: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Get spacing, origin and direction from a documented SCiLS px2world matrix.
+
+        According to the SCiLS API docs, px2world is a 4x4 transform mapping
+        optical image pixel coordinates to SCiLS world coordinates.
+        """
+        tmat = np.asarray(px2world, dtype=np.float64).reshape(4, 4)
+        basis = tmat[:3, :3]
+
+        # Spacing is derived from basis vector lengths and converted from um to mm.
+        spacing_x = np.linalg.norm(basis[:, 0]) / 1000.0
+        spacing_y = np.linalg.norm(basis[:, 1]) / 1000.0
+        spacing_z_raw = np.linalg.norm(basis[:, 2]) / 1000.0
+        # NOTE: Intentionally hardcoded z spacing to 0.01 mm (10 um) for current export workflow.
+        # Keep this fixed even if px2world/slice_thickness suggests a different z scale.
+        spacing_z = 0.01
+
+        def _safe_unit(v: np.ndarray, fallback: np.ndarray) -> np.ndarray:
+            n = np.linalg.norm(v)
+            return (v / n) if n > 0 else fallback
+
+        d0 = _safe_unit(basis[:, 0], np.array([1.0, 0.0, 0.0]))
+        d1 = _safe_unit(basis[:, 1], np.array([0.0, 1.0, 0.0]))
+        d2_from_t = _safe_unit(basis[:, 2], np.zeros(3))
+        if np.linalg.norm(d2_from_t) > 0:
+            d2 = d2_from_t
+        else:
+            d2 = np.cross(d0, d1)
+            d2 = _safe_unit(d2, np.array([0.0, 0.0, 1.0]))
+
+        direction = np.column_stack((d0, d1, d2))
+        spacing = np.array([spacing_x, spacing_y, spacing_z], dtype=np.float64)
+        origin = (tmat[:3, 3] / 1000.0).astype(np.float64)
+        return spacing, origin, direction
+
+    @staticmethod
+    def get_geometry_from_transformation(transformation: np.ndarray, slice_thickness: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Get spacing/origin/direction from a region transformation matrix."""
+        return slxFileHelper._get_geometry_from_px2world(transformation, slice_thickness)
+
+    @staticmethod
     def load_region_data_as_continuous_centroids(dataset: sl.DatasetProxy, r_name: str, r_id: int, features: np.ndarray) -> np.ndarray:
         """
         Load region spectral data as continuous centroid format.
@@ -237,10 +281,8 @@ class slxFileHelper:
         Returns:
             np.ndarray: 3x3 normalized direction matrix
         """
-        direction_normalized = np.array(transformation)[:3, :3]
-        direction_normalized[2, 2] = slice_thickness
-        direction_normalized = direction_normalized / np.linalg.norm(direction_normalized, axis=1)
-        return direction_normalized
+        _, _, direction = slxFileHelper.get_geometry_from_transformation(transformation, slice_thickness)
+        return direction
     
     @staticmethod
     def get_origin_mm(transformation: np.ndarray) -> np.ndarray:
@@ -267,11 +309,8 @@ class slxFileHelper:
         Returns:
             np.ndarray: 3D pixel spacing [x, y, z] in millimeters
         """
-        pixel_spacing = np.zeros(3)
-        for i in range(2):  # X and Y from transformation matrix
-            pixel_spacing[i] = np.sqrt(np.sum(np.square(transformation[i, :2]))) / 1000
-        pixel_spacing[2] = slice_thickness / 1000  # Z from slice thickness
-        return pixel_spacing
+        spacing, _, _ = slxFileHelper.get_geometry_from_transformation(transformation, slice_thickness)
+        return spacing
 
     @staticmethod
     def load_regions_as_labels(dataset: sl.DatasetProxy, r_id: int, final_regions_as_labels: list, slice_thickness: float) -> sitk.Image:
@@ -369,21 +408,40 @@ class slxFileHelper:
         """
         optical_image_list = []
         
-        index_image = dataset.get_index_images(r_id)[0]
-        mask_foreground = index_image.values >= 0
-        mask_indices = index_image.values[mask_foreground].astype(np.int32)
-        
         for s_name, s_id in optical_images:
             try:
                 optical_image = dataset.optical_images.get_image(s_id)
-                # Create spatial array matching the region dimensions
-                spatial_array = np.zeros(optical_image.values.shape[:3])
-                spatial_array[mask_foreground] = optical_image.values[mask_indices]
+                print(optical_image.name, optical_image.type)
 
-                # Convert to SimpleITK image
-                sitk_image = sitk.GetImageFromArray(spatial_array[..., np.newaxis].T)
-                optical_image_list.append([s_name, sitk_image])
-                # optical_image_list.append([s_name, optical_image])
+                # Load PNG binary data and convert to numpy array
+                if hasattr(optical_image, 'data') and optical_image.data is not None:
+                    # Decode PNG from binary blob
+                    png_bytes = io.BytesIO(optical_image.data)
+                    pil_image = Image.open(png_bytes)
+                    # Convert to luminance (single channel grayscale) and then to numpy
+                    image_array = np.array(pil_image.convert("L"))
+
+                    # Convert to SimpleITK image (z, y, x)
+                    sitk_image = sitk.GetImageFromArray(image_array[np.newaxis, ...])
+
+                    if hasattr(optical_image, 'px2world') and optical_image.px2world is not None:
+                        try:
+                            spacing, origin, direction = slxFileHelper._get_geometry_from_px2world(
+                                optical_image.px2world,
+                                slice_thickness,
+                            )
+                            sitk_image.SetSpacing(spacing.tolist())
+                            sitk_image.SetOrigin(origin.tolist())
+                            sitk_image.SetDirection(direction.reshape(-1).tolist())
+                        except Exception as geo_error:
+                            print(
+                                f"Warning: Could not set spacing/origin from px2world for "
+                                f"'{s_name}' (ID: {s_id}): {geo_error}"
+                            )
+                    
+                    optical_image_list.append([s_name, sitk_image])
+                else:
+                    print(f"Warning: No data or values attribute found for optical image '{s_name}' (ID: {s_id})")
             except Exception as e:
                 print(f"Warning: Could not load optical image '{s_name}' (ID: {s_id}): {e}")
         
@@ -466,8 +524,8 @@ class slxFileHelper:
                 df: pd.DataFrame = dataset.optical_images.get_ids()
                 optical_images = []
                 for i, row in df.iterrows():
-                    if row["has_external_image"] == False:
-                        optical_images.append([row["name"], row["id"]],)
+                    # if row["has_external_image"] == False:
+                    optical_images.append([row["name"], row["id"]],)
                     
                 if slx_context["optical_images"] is not None and len(slx_context["optical_images"]) > 0:
                     optical_images = [S for S in optical_images if S[0] in slx_context["optical_images"]]
