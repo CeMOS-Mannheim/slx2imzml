@@ -11,3 +11,5 @@ scilslab-8.1.123-cp312-cp312-win_amd64.whl
 
 .Rproj.user
 .venv
+*/__pycache__
+
