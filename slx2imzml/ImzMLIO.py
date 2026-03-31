@@ -90,6 +90,7 @@ def main():
 
             # Export optical images
             if final_optical_images:
+                
                 print("Processing optical images...")
                 oImages = slxFileHelper.load_optical_image(
                     dataset, final_optical_images, slice_thickness
@@ -99,6 +100,7 @@ def main():
                     normalized_name = slxFileHelper.normalize(name)
                     # oi = set_image_properties(image)
                     optical_path = f"{str(filename_without_extension)}/{normalized_name}.nrrd"
+                    pathlib.Path(optical_path).parent.mkdir(parents=True, exist_ok=True)
                     sitk.WriteImage(image, optical_path)
                     print(f"Exported optical image: {optical_path}")
 
