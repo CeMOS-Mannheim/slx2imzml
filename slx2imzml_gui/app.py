@@ -54,10 +54,11 @@ app_ui = ui.page_sidebar(
         ui.card(
             ui.card_header("Start Export"),
             ui.input_action_button("btn_process", "Start", icon=fa.icon_svg("file-export"), class_="btn-primary", disabled=True),
-            ui.output_text_verbatim("txt_selection_status"),
+            ui.output_ui("ui_selection_status"),
             ui.p("Click the button to start the export process. Ensure you have selected regions and feature lists."),
         ),
         title="SCiLS Exporter Controls",
+        width="20%",
     ),
     ui.layout_column_wrap(
         ui.card(
@@ -177,14 +178,42 @@ def server(input: Inputs, output: Outputs, session: Session):
         return tuple()
 
     @output
-    @render.text
-    def txt_selection_status():
+    @render.ui
+    def ui_selection_status():
         try:
             r = get_selection("region_table")
             f = get_selection("feature_table")
-            return f"Selected: Regs={r}, Feats={f}"
-        except:
-            return "Selection: (Waiting...)"
+            
+            reg_df = slx_regions()
+            feat_df = slx_feature_lists()
+            
+            sel_regions = reg_df.iloc[list(r)]["name"].tolist() if not reg_df.empty and len(r) > 0 else []
+            sel_features = feat_df.iloc[list(f)]["name"].tolist() if not feat_df.empty and len(f) > 0 else []
+            
+            reg_text = ", ".join(sel_regions) if sel_regions else "None"
+            feat_text = ", ".join(sel_features) if sel_features else "None"
+            
+            return ui.div(
+                ui.h6("Currently Selected:", class_="fw-bold mb-2"),
+                ui.div(
+                    ui.span("Regions:", class_="fw-semibold me-2"),
+                    ui.span(reg_text, class_="text-muted"),
+                    class_="mb-1 text-break"
+                ),
+                ui.div(
+                    ui.span("Features:", class_="fw-semibold me-2"),
+                    ui.span(feat_text, class_="text-muted"),
+                    class_="text-break"
+                ),
+                class_="mt-3 mb-3 p-3 border rounded bg-light"
+            )
+        except Exception as e:
+            return ui.div(
+                ui.h6("Currently Selected:", class_="fw-bold mb-2"),
+                ui.div(ui.span("Regions:", class_="fw-semibold me-2"), ui.span("None", class_="text-muted"), class_="mb-1"),
+                ui.div(ui.span("Features:", class_="fw-semibold me-2"), ui.span("None", class_="text-muted")),
+                class_="mt-3 mb-3 p-3 border rounded bg-light"
+            )
 
     @reactive.effect
     def _():
