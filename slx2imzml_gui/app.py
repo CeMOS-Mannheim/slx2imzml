@@ -269,16 +269,13 @@ def server(input: Inputs, output: Outputs, session: Session):
             # Non-blocking or at least cleaner argument list
             process = subprocess.run(
                 [sys.executable, "-m", "slx2imzml", json_abs_path],
-                capture_output=True,
-                text=True,
                 check=False
             )
             
             if process.returncode == 0:
                 ui.notification_show("Export completed successfully!", type="message", duration=10)
             else:
-                error_log = process.stderr if process.stderr else process.stdout
-                print(f"Export tool failed:\n{error_log}")
+                print(f"Export tool failed with code: {process.returncode}")
                 ui.notification_show(f"Export tool failed (Code: {process.returncode}). Check console for details.", type="error", duration=15)
         except Exception as e:
             ui.notification_show(f"Execution failed: {str(e)}", type="error")
