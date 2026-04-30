@@ -137,9 +137,13 @@ def server(input: Inputs, output: Outputs, session: Session):
                     if len(r.subregions) == 0:
                         # Get spot count
                         spots = dataset.get_region_spots(r.id)
+                        
+                        # spots is a dict with keys like 'spot_id', 'x', 'y', etc.
+                        num_spots = len(spots.get('spot_id', [])) if isinstance(spots, dict) else 0
+                        
                         regions_data.append({
                             "name": r.name,
-                            "nPx": len(spots),
+                            "nPx": num_spots,
                             "subRegions": 0 # R app logic: length(x$polygons) - simplified here as leaf
                         })
                 
