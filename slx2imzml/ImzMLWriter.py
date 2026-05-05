@@ -134,7 +134,7 @@ class ImzMLWriter:
             # Write intensity data for each pixel
             for i, (x, y, z) in enumerate(indices):
                 # Skip empty spectra (NaN or zero intensity)
-                if np.isnan(data[x, y, z, 0]) or np.sum(data[x, y, z, :]) == 0:
+                if np.isnan(data[x, y, z, 0]):
                     continue
 
                 # Write intensity values for this pixel
