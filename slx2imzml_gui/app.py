@@ -6,7 +6,10 @@ import tkinter as tk
 from tkinter import filedialog
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 from shiny import App, Inputs, Outputs, Session, render, ui, reactive
+from shinywidgets import output_widget, render_widget
 import faicons as fa
 import scilslab as sl
 
@@ -54,23 +57,34 @@ app_ui = ui.page_sidebar(
         ui.card(
             ui.card_header("Start Export"),
             ui.input_action_button("btn_process", "Start", icon=fa.icon_svg("file-export"), class_="btn-primary", disabled=True),
-            ui.output_text_verbatim("txt_selection_status"),
+            ui.output_ui("ui_selection_status"),
             ui.p("Click the button to start the export process. Ensure you have selected regions and feature lists."),
         ),
         title="SCiLS Exporter Controls",
+        width="20%",
     ),
-    ui.layout_column_wrap(
-        ui.card(
-            ui.card_header("Region Tree"),
-            ui.output_data_frame("region_table"),
-            full_screen=True,
+    ui.layout_columns(
+        ui.div(
+            ui.card(
+                ui.card_header("Region Tree"),
+                ui.output_data_frame("region_table"),
+                full_screen=True,
+                class_="flex-fill"
+            ),
+            ui.card(
+                output_widget("region_plot"),
+                full_screen=True,
+                class_="flex-fill"
+            ),
+            class_="d-flex flex-column h-100 gap-3"
         ),
         ui.card(
             ui.card_header("Feature Lists"),
             ui.output_data_frame("feature_table"),
             full_screen=True,
+            class_="h-100"
         ),
-        width=1/2,
+        col_widths=[6, 6]
     ),
     title="SCiLS Exporter",
     fillable=True,
@@ -79,7 +93,20 @@ app_ui = ui.page_sidebar(
 def server(input: Inputs, output: Outputs, session: Session):
     slx_path = reactive.Value(None)
     slx_regions = reactive.Value(pd.DataFrame())
+    slx_regions_styles = reactive.Value([])
     slx_feature_lists = reactive.Value(pd.DataFrame())
+    
+    fig = go.FigureWidget()
+    fig.update_layout(
+        yaxis=dict(autorange='reversed', title='Y Coordinates', showgrid=False, zeroline=False, scaleanchor='x', scaleratio=1),
+        xaxis=dict(title='X Coordinates', showgrid=False, zeroline=False),
+        showlegend=False,
+        margin=dict(l=20, r=20, t=40, b=20),
+        dragmode='pan',
+        hovermode='closest',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)'
+    )
     
     # New: Cache selections to avoid SilentException in event handlers
     selected_regions_idx = reactive.Value(tuple())
@@ -130,20 +157,68 @@ def server(input: Inputs, output: Outputs, session: Session):
                 all_regions = region_tree.get_all_regions()
                 print(f"Found {len(all_regions)} regions in total")
                 
+                cmap = plt.get_cmap('tab20')
                 regions_data = []
+                trace_data = []
+                styles = []
+                
+                idx = 0
                 for r in all_regions:
                     # Skip regions with subregions (only leaf nodes)
                     if len(r.subregions) == 0:
                         # Get spot count
                         spots = dataset.get_region_spots(r.id)
+                        num_spots = len(spots.get('spot_id', [])) if isinstance(spots, dict) else 0
+                        
+                        color = cmap(idx % 20)
+                        hex_color = '#%02x%02x%02x' % (int(color[0]*255), int(color[1]*255), int(color[2]*255))
+                        
                         regions_data.append({
+                            "Color": "",
                             "name": r.name,
-                            "nPx": len(spots),
+                            "nPx": num_spots,
                             "subRegions": 0 # R app logic: length(x$polygons) - simplified here as leaf
                         })
+                        
+                        styles.append({
+                            "rows": [idx],
+                            "cols": [0],
+                            "style": {"background-color": hex_color}
+                        })
+                        
+                        if hasattr(r, 'polygons'):
+                            xs = []
+                            ys = []
+                            for poly in r.polygons:
+                                if len(poly) > 0:
+                                    xs.extend([p.x for p in poly])
+                                    xs.append(None)
+                                    ys.extend([p.y for p in poly])
+                                    ys.append(None)
+                            
+                            if len(xs) > 0:
+                                trace_data.append(dict(
+                                    x=xs, y=ys,
+                                    fill='toself',
+                                    mode='lines',
+                                    line=dict(color=hex_color, width=1),
+                                    fillcolor=hex_color,
+                                    opacity=0.3,
+                                    name=r.name,
+                                    hoverinfo='name',
+                                    hoverlabel=dict(namelength=-1)
+                                ))
+                        idx += 1
                 
                 print(f"Loaded {len(regions_data)} leaf regions")
                 slx_regions.set(pd.DataFrame(regions_data))
+                slx_regions_styles.set(styles)
+                
+                # Update figure widget
+                with fig.batch_update():
+                    fig.data = []
+                    for td in trace_data:
+                        fig.add_trace(go.Scatter(**td))
                 
             ui.notification_show("SCiLS file access successful. Please choose regions and feature lists to export.", type="message")
         except Exception as e:
@@ -155,7 +230,15 @@ def server(input: Inputs, output: Outputs, session: Session):
         df = slx_regions()
         if df.empty:
             return None
-        return render.DataGrid(df, selection_mode="rows")
+        return render.DataGrid(df, selection_mode="rows", styles=slx_regions_styles(), height="100%")
+        
+    @output
+    @render_widget
+    def region_plot():
+        df = slx_regions()
+        if df.empty:
+            return None
+        return fig
 
     @output
     @render.data_frame
@@ -163,7 +246,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         df = slx_feature_lists()
         if df.empty:
             return None
-        return render.DataGrid(df, selection_mode="rows")
+        return render.DataGrid(df, selection_mode="rows", height="100%")
 
     def get_selection(base_id):
         """Retrieve selection indices from the confirmed _selected_rows attribute."""
@@ -176,15 +259,55 @@ def server(input: Inputs, output: Outputs, session: Session):
             pass
         return tuple()
 
+    @reactive.effect
+    def _update_plot_selection():
+        selected = get_selection("region_table")
+        with fig.batch_update():
+            for i, trace in enumerate(fig.data):
+                if i in selected:
+                    trace.line.width = 4
+                    trace.opacity = 0.9
+                else:
+                    trace.line.width = 1
+                    trace.opacity = 0.3
+
     @output
-    @render.text
-    def txt_selection_status():
+    @render.ui
+    def ui_selection_status():
         try:
             r = get_selection("region_table")
             f = get_selection("feature_table")
-            return f"Selected: Regs={r}, Feats={f}"
-        except:
-            return "Selection: (Waiting...)"
+            
+            reg_df = slx_regions()
+            feat_df = slx_feature_lists()
+            
+            sel_regions = reg_df.iloc[list(r)]["name"].tolist() if not reg_df.empty and len(r) > 0 else []
+            sel_features = feat_df.iloc[list(f)]["name"].tolist() if not feat_df.empty and len(f) > 0 else []
+            
+            reg_text = ", ".join(sel_regions) if sel_regions else "None"
+            feat_text = ", ".join(sel_features) if sel_features else "None"
+            
+            return ui.div(
+                ui.h6("Currently Selected:", class_="fw-bold mb-2"),
+                ui.div(
+                    ui.span("Regions:", class_="fw-semibold me-2"),
+                    ui.span(reg_text, class_="text-muted"),
+                    class_="mb-1 text-break"
+                ),
+                ui.div(
+                    ui.span("Features:", class_="fw-semibold me-2"),
+                    ui.span(feat_text, class_="text-muted"),
+                    class_="text-break"
+                ),
+                class_="mt-3 mb-3 p-3 border rounded bg-light"
+            )
+        except Exception as e:
+            return ui.div(
+                ui.h6("Currently Selected:", class_="fw-bold mb-2"),
+                ui.div(ui.span("Regions:", class_="fw-semibold me-2"), ui.span("None", class_="text-muted"), class_="mb-1"),
+                ui.div(ui.span("Features:", class_="fw-semibold me-2"), ui.span("None", class_="text-muted")),
+                class_="mt-3 mb-3 p-3 border rounded bg-light"
+            )
 
     @reactive.effect
     def _():
@@ -269,16 +392,13 @@ def server(input: Inputs, output: Outputs, session: Session):
             # Non-blocking or at least cleaner argument list
             process = subprocess.run(
                 [sys.executable, "-m", "slx2imzml", json_abs_path],
-                capture_output=True,
-                text=True,
                 check=False
             )
             
             if process.returncode == 0:
                 ui.notification_show("Export completed successfully!", type="message", duration=10)
             else:
-                error_log = process.stderr if process.stderr else process.stdout
-                print(f"Export tool failed:\n{error_log}")
+                print(f"Export tool failed with code: {process.returncode}")
                 ui.notification_show(f"Export tool failed (Code: {process.returncode}). Check console for details.", type="error", duration=15)
         except Exception as e:
             ui.notification_show(f"Execution failed: {str(e)}", type="error")
