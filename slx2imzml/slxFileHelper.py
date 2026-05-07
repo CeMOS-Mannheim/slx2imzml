@@ -149,9 +149,8 @@ class slxFileHelper:
         spacing_x = np.linalg.norm(basis[:, 0]) / 1000.0
         spacing_y = np.linalg.norm(basis[:, 1]) / 1000.0
         spacing_z_raw = np.linalg.norm(basis[:, 2]) / 1000.0
-        # NOTE: Intentionally hardcoded z spacing to 0.01 mm (10 um) for current export workflow.
-        # Keep this fixed even if px2world/slice_thickness suggests a different z scale.
-        spacing_z = 0.01
+        # Use the passed slice_thickness (assumed to be in micrometers) and convert to mm
+        spacing_z = slice_thickness / 1000.0
 
         def _safe_unit(v: np.ndarray, fallback: np.ndarray) -> np.ndarray:
             n = np.linalg.norm(v)

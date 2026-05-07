@@ -2,24 +2,27 @@
 
 A Python package for converting SCiLS Lab files (.slx) to open-standard imzML files for mass spectrometry imaging (MSI) data analysis.
 
+![SCiLS Exporter GUI](assets/screenshot.png)
+
 ## Overview
 
-This package reads proprietary SCiLS Lab files (using API clients) and exports regions as accessible imzML files that are compatible with [M²aia](http://m2aia.de) and other open-source MSI analysis tools. The converter supports both continuous centroid and profile spectrum modes.
+This package reads proprietary SCiLS Lab files and exports regions as accessible imzML files that are compatible with [M²aia](http://m2aia.de) and other open-source MSI analysis tools. The tool provides both an interactive Graphical User Interface (GUI) and a Command Line Interface (CLI) for flexible workflows.
 
 ## Features
 
-- **Multi-format Export**: Converts SCiLS Lab regions to imzML format with continuous profile/centroid spectrum support
-- **Additional Outputs**: Exports spot images, optical images, and region masks as NRRD files
-- **Flexible Configuration**: JSON-based export configuration for customizing output
-- **M²aia Compatibility**: Generated imzML files are fully compatible with M²aia software
-- **Batch Processing**: Process multiple regions and datasets in a single run
+- **Interactive GUI**: User-friendly interface for browsing datasets, visualizing regions, and selecting feature lists.
+- **Multi-format Export**: Converts SCiLS Lab regions to imzML format with continuous profile/centroid spectrum support.
+- **Spatial Visualization**: Preview region polygons overlaid on optical overview images.
+- **Feature Inspection**: Detailed view of m/z features with calculated center mass and ppm width.
+- **Additional Outputs**: Exports spot images (TIC, normalizations), optical images, and region masks as NRRD files.
+- **M²aia Compatibility**: Generated imzML files are fully compatible with M²aia software.
 
 ## Installation
 
 ### Prerequisites
 
 - Python ≥ 3.6
-- SCiLS Lab Python API (Bruker Daltonics) 
+- **SCiLS Lab Python API**: This is a proprietary library from Bruker. You must install the `scilslab-*.whl` package provided by Bruker. It is shipped with the SCiLS Lab installation and can be found in the `APIClients\Python` folder of the installation directory (default: `C:\Program Files\SCiLS\SCiLS Lab\APIClients\Python`).
 
 ### Install from Source
 
@@ -29,23 +32,29 @@ cd slx2imzml
 pip install -e .
 ```
 
-### Dependencies
-
-The package automatically installs the following dependencies:
-
-- `numpy` - Numerical computations
-- `pandas` - Data manipulation
-- `jinja2` - XML template rendering
-- `matplotlib` - Plotting utilities
-- `SimpleITK` - Medical image processing
-- `scilslab` - SCiLS Lab API integration
+This command will install the `slx2imzml` package and all its dependencies, including the GUI components.
 
 ## Usage
 
-### Command Line Interface
+### Graphical User Interface (Recommended)
+
+To start the interactive exporter, run:
 
 ```bash
-slx2imzml export_instructions.json
+slx2imzml-gui
+```
+
+1. **Browse**: Select your `.slx` file.
+2. **Select**: Choose the regions and feature lists you wish to export. You can preview the spatial regions in the plot.
+3. **Configure**: Set the slice thickness in the advanced options.
+4. **Export**: Click "Start" to begin the conversion.
+
+### Command Line Interface
+
+For batch processing or automation, you can use the CLI:
+
+```bash
+python -m slx2imzml export_instructions.json
 ```
 
 ### Export Instructions Format
@@ -107,11 +116,15 @@ The converter preserves spatial information including:
 
 ```
 slx2imzml/
-├── __init__.py              # Package initialization
-├── ImzMLIO.py              # Main conversion logic
-├── ImzMLWriter.py          # imzML file writing utilities
-├── ScilsLabFileHelper.py   # SCiLS Lab data access helpers
-└── imzMLTemplate.j2        # Jinja2 template for imzML XML
+├── slx2imzml/              # Core conversion package
+│   ├── ImzMLIO.py          # Main conversion logic
+│   ├── ImzMLWriter.py      # imzML file writing utilities
+│   ├── slxFileHelper.py    # SCiLS Lab data access helpers
+│   └── imzMLTemplate.j2    # Jinja2 template for imzML XML
+├── slx2imzml_gui/          # GUI application
+│   ├── app.py              # PyShiny application logic
+│   └── launcher.py         # Entry point for slx2imzml-gui
+└── assets/                 # Documentation assets (screenshots)
 ```
 
 ## Contributing
