@@ -11,3 +11,5 @@ Pillow
 # GUI dependencies
 shiny
 faicons
+plotly
+shinywidgets
