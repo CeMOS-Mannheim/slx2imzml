@@ -22,7 +22,7 @@ This package reads proprietary SCiLS Lab files and exports regions as accessible
 ### Prerequisites
 
 - Python ≥ 3.6
-- **SCiLS Lab Python API**: This is a proprietary library from Bruker. You must install the `.whl` package provided by Bruker or located in this repository.
+- **SCiLS Lab Python API**: This is a proprietary library from Bruker. You must install the `scilslab-*.whl` package provided by Bruker. It is shipped with the SCiLS Lab installation and can be found in the `APIClients\Python` folder of the installation directory (default: `C:\Program Files\SCiLS\SCiLS Lab\APIClients\Python`).
 
 ### Install from Source
 
@@ -57,11 +57,9 @@ For batch processing or automation, you can use the CLI:
 python -m slx2imzml export_instructions.json
 ```
 
-Refer to the section below for details on the JSON configuration.
-
 ### Export Instructions Format
 
-Create a JSON configuration file to specify export parameters for the CLI:
+Create a JSON configuration file to specify export parameters:
 
 ```json
 {
@@ -81,6 +79,38 @@ Create a JSON configuration file to specify export parameters for the CLI:
 }
 ```
 
+### Output Files
+
+For each processed region, the tool generates:
+
+- **imzML Files**: `region_name.imzML` and `region_name.ibd` - imzML format files
+- **NRRD Files**: 
+  - `region_name.mask.nrrd` - Region mask as multilabel image
+  - `region_name.spot_image_name.nrrd` - Spot images (e.g., normalizations)
+  - `region_name.optical_image_name.nrrd` - Optical reference images
+
+The naming is based on the regions_name defined in SCiLS Lab.
+
+## Technical Details
+
+### Spectrum Modes
+
+- **Continuous Profile/Centroid**: Full spectrum data export (when `final_features` is empty)
+- **Continuous Centroid**: Feature-based export with specified m/z values
+
+### Coordinate System
+
+The converter preserves spatial information including:
+- Pixel spacing in micrometers
+- Origin coordinates
+- Direction matrix for proper spatial positioning
+
+### Data Processing
+
+1. **Region Processing**: Extracts spectral data for each specified region
+2. **Feature Selection**: Applies feature lists or exports full spectra
+3. **Spatial Mapping**: Maintains pixel-to-coordinate transformations
+4. **Format Conversion**: Generates imzML/ibd file pairs with proper metadata
 
 ## File Structure
 
@@ -104,3 +134,12 @@ This project is developed at Hochschule Mannheim in connection with the M²aia p
 ## License
 
 MIT License - See LICENSE file for details.
+
+## Related Projects
+
+- [M²aia](http://m2aia.de) - Open-source software for mass spectrometry imaging
+- [imzML](https://ms-imaging.org/wp/imzml/) - Open standard for mass spectrometry imaging data
+
+## Support
+
+For questions and issues, please contact the author or visit the M²aia project website.
