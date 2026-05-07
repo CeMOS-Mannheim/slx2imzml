@@ -2,24 +2,27 @@
 
 A Python package for converting SCiLS Lab files (.slx) to open-standard imzML files for mass spectrometry imaging (MSI) data analysis.
 
+![SCiLS Exporter GUI](assets/screenshot.png)
+
 ## Overview
 
-This package reads proprietary SCiLS Lab files (using API clients) and exports regions as accessible imzML files that are compatible with [M²aia](http://m2aia.de) and other open-source MSI analysis tools. The converter supports both continuous centroid and profile spectrum modes.
+This package reads proprietary SCiLS Lab files and exports regions as accessible imzML files that are compatible with [M²aia](http://m2aia.de) and other open-source MSI analysis tools. The tool provides both an interactive Graphical User Interface (GUI) and a Command Line Interface (CLI) for flexible workflows.
 
 ## Features
 
-- **Multi-format Export**: Converts SCiLS Lab regions to imzML format with continuous profile/centroid spectrum support
-- **Additional Outputs**: Exports spot images, optical images, and region masks as NRRD files
-- **Flexible Configuration**: JSON-based export configuration for customizing output
-- **M²aia Compatibility**: Generated imzML files are fully compatible with M²aia software
-- **Batch Processing**: Process multiple regions and datasets in a single run
+- **Interactive GUI**: User-friendly interface for browsing datasets, visualizing regions, and selecting feature lists.
+- **Multi-format Export**: Converts SCiLS Lab regions to imzML format with continuous profile/centroid spectrum support.
+- **Spatial Visualization**: Preview region polygons overlaid on optical overview images.
+- **Feature Inspection**: Detailed view of m/z features with calculated center mass and ppm width.
+- **Additional Outputs**: Exports spot images (TIC, normalizations), optical images, and region masks as NRRD files.
+- **M²aia Compatibility**: Generated imzML files are fully compatible with M²aia software.
 
 ## Installation
 
 ### Prerequisites
 
 - Python ≥ 3.6
-- SCiLS Lab Python API (Bruker Daltonics) 
+- **SCiLS Lab Python API**: This is a proprietary library from Bruker. You must install the `.whl` package provided by Bruker or located in this repository.
 
 ### Install from Source
 
@@ -29,28 +32,36 @@ cd slx2imzml
 pip install -e .
 ```
 
-### Dependencies
-
-The package automatically installs the following dependencies:
-
-- `numpy` - Numerical computations
-- `pandas` - Data manipulation
-- `jinja2` - XML template rendering
-- `matplotlib` - Plotting utilities
-- `SimpleITK` - Medical image processing
-- `scilslab` - SCiLS Lab API integration
+This command will install the `slx2imzml` package and all its dependencies, including the GUI components.
 
 ## Usage
 
-### Command Line Interface
+### Graphical User Interface (Recommended)
+
+To start the interactive exporter, run:
 
 ```bash
-slx2imzml export_instructions.json
+slx2imzml-gui
 ```
+
+1. **Browse**: Select your `.slx` file.
+2. **Select**: Choose the regions and feature lists you wish to export. You can preview the spatial regions in the plot.
+3. **Configure**: Set the slice thickness in the advanced options.
+4. **Export**: Click "Start" to begin the conversion.
+
+### Command Line Interface
+
+For batch processing or automation, you can use the CLI:
+
+```bash
+python -m slx2imzml export_instructions.json
+```
+
+Refer to the section below for details on the JSON configuration.
 
 ### Export Instructions Format
 
-Create a JSON configuration file to specify export parameters:
+Create a JSON configuration file to specify export parameters for the CLI:
 
 ```json
 {
@@ -70,48 +81,20 @@ Create a JSON configuration file to specify export parameters:
 }
 ```
 
-### Output Files
-
-For each processed region, the tool generates:
-
-- **imzML Files**: `region_name.imzML` and `region_name.ibd` - imzML format files
-- **NRRD Files**: 
-  - `region_name.mask.nrrd` - Region mask as multilabel image
-  - `region_name.spot_image_name.nrrd` - Spot images (e.g., normalizations)
-  - `region_name.optical_image_name.nrrd` - Optical reference images
-
-The naming is based on the regions_name defined in SCiLS Lab.
-
-## Technical Details
-
-### Spectrum Modes
-
-- **Continuous Profile/Centroid**: Full spectrum data export (when `final_features` is empty)
-- **Continuous Centroid**: Feature-based export with specified m/z values
-
-### Coordinate System
-
-The converter preserves spatial information including:
-- Pixel spacing in micrometers
-- Origin coordinates
-- Direction matrix for proper spatial positioning
-
-### Data Processing
-
-1. **Region Processing**: Extracts spectral data for each specified region
-2. **Feature Selection**: Applies feature lists or exports full spectra
-3. **Spatial Mapping**: Maintains pixel-to-coordinate transformations
-4. **Format Conversion**: Generates imzML/ibd file pairs with proper metadata
 
 ## File Structure
 
 ```
 slx2imzml/
-├── __init__.py              # Package initialization
-├── ImzMLIO.py              # Main conversion logic
-├── ImzMLWriter.py          # imzML file writing utilities
-├── ScilsLabFileHelper.py   # SCiLS Lab data access helpers
-└── imzMLTemplate.j2        # Jinja2 template for imzML XML
+├── slx2imzml/              # Core conversion package
+│   ├── ImzMLIO.py          # Main conversion logic
+│   ├── ImzMLWriter.py      # imzML file writing utilities
+│   ├── slxFileHelper.py    # SCiLS Lab data access helpers
+│   └── imzMLTemplate.j2    # Jinja2 template for imzML XML
+├── slx2imzml_gui/          # GUI application
+│   ├── app.py              # PyShiny application logic
+│   └── launcher.py         # Entry point for slx2imzml-gui
+└── assets/                 # Documentation assets (screenshots)
 ```
 
 ## Contributing
@@ -121,12 +104,3 @@ This project is developed at Hochschule Mannheim in connection with the M²aia p
 ## License
 
 MIT License - See LICENSE file for details.
-
-## Related Projects
-
-- [M²aia](http://m2aia.de) - Open-source software for mass spectrometry imaging
-- [imzML](https://ms-imaging.org/wp/imzml/) - Open standard for mass spectrometry imaging data
-
-## Support
-
-For questions and issues, please contact the author or visit the M²aia project website.
