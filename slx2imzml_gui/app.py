@@ -128,6 +128,11 @@ app_ui = ui.page_sidebar(
             ui.p("Click the button to start the export process. Ensure you have selected regions and feature lists."),
         ),
         ui.card(
+            ui.card_header("Normalizations - For Info Only"),
+            ui.output_data_frame("spot_image_table"),
+            full_screen=True,
+        ),
+        ui.card(
             ui.card_header("Advanced Options"),
             ui.input_numeric("slice_thickness", "Slice Thickness (µm)", value=10, min=1),
         ),
@@ -167,8 +172,8 @@ app_ui = ui.page_sidebar(
                 class_="flex-fill"
             ),
             ui.card(
-                ui.card_header("Normalizations - For Information Only"),
-                ui.output_data_frame("spot_image_table"),
+                ui.card_header("Feature Details"),
+                ui.output_data_frame("feature_details_table"),
                 full_screen=True,
                 class_="flex-fill"
             ),
@@ -188,6 +193,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     slx_regions_styles = reactive.Value([])
     slx_feature_lists = reactive.Value(pd.DataFrame())
     slx_spot_images = reactive.Value(pd.DataFrame())
+    slx_feature_details = reactive.Value(pd.DataFrame())
     slx_optical_image = reactive.Value(None)
     
     fig = go.FigureWidget()
@@ -260,8 +266,13 @@ def server(input: Inputs, output: Outputs, session: Session):
                             xs, ys = [], []
                             for poly in r.polygons:
                                 if len(poly) > 0:
-                                    xs.extend([p.x for p in poly]); xs.append(None)
-                                    ys.extend([p.y for p in poly]); ys.append(None)
+                                    poly_xs = [p.x for p in poly]
+                                    poly_ys = [p.y for p in poly]
+                                    # Close the polygon by repeating the first point
+                                    poly_xs.append(poly_xs[0])
+                                    poly_ys.append(poly_ys[0])
+                                    xs.extend(poly_xs); xs.append(None)
+                                    ys.extend(poly_ys); ys.append(None)
                             
                             if xs:
                                 trace_data.append(dict(
@@ -300,6 +311,52 @@ def server(input: Inputs, output: Outputs, session: Session):
             ui.update_action_button("btn_process", disabled=not ready)
         except Exception:
             ui.update_action_button("btn_process", disabled=True)
+
+    @reactive.effect
+    def _update_feature_details():
+        selected_indices = get_selection(input, "feature_table")
+        path = slx_path()
+        if not path or not selected_indices:
+            slx_feature_details.set(pd.DataFrame())
+            return
+
+        fl_df = slx_feature_lists()
+        selected_ids = fl_df.iloc[list(selected_indices)]["id"].tolist()
+        
+        try:
+            with sl.LocalSession(path) as slx_file:
+                dataset = slx_file.dataset_proxy
+                all_features = []
+                for list_id in selected_ids:
+                    features = dataset.feature_table.get_features(list_id)
+                    all_features.append(features)
+                
+                if all_features:
+                    df = pd.concat(all_features, ignore_index=True)
+                    # Add mz_center/centroid for convenience
+                    df["mz_center"] = (df["mz_low"] + df["mz_high"]) / 2
+                    # Add mz width in ppm
+                    # ppm = (delta_mz / mz_center) * 10^6
+                    df["mz width"] = ((df["mz_high"] - df["mz_low"]) / df["mz_center"]) * 1e6
+                    
+                    # Sort by mz_center
+                    df = df.sort_values("mz_center")
+
+                    # Round values for display: 4 digits for mz, 1 digit for ppm
+                    for col in ["mz_center", "mz_low", "mz_high"]:
+                        if col in df.columns:
+                            df[col] = df[col].round(4)
+                    if "mz width" in df.columns:
+                        df["mz width"] = df["mz width"].round(1)
+                    
+                    # Order columns as requested: id, name, mz_center, mz width, mz_low, mz_high
+                    available_cols = [c for c in ["id", "name", "mz_center", "mz width", "mz_low", "mz_high"] if c in df.columns]
+                    slx_feature_details.set(df[available_cols])
+                else:
+                    slx_feature_details.set(pd.DataFrame())
+        except Exception as e:
+            print(f"Error fetching feature details: {e}")
+            slx_feature_details.set(pd.DataFrame())
 
     @reactive.effect
     def _update_plot_selection():
@@ -400,6 +457,12 @@ def server(input: Inputs, output: Outputs, session: Session):
     @render.data_frame
     def spot_image_table():
         df = slx_spot_images()
+        return render.DataGrid(df, selection_mode="none", height="200px") if not df.empty else None
+
+    @output
+    @render.data_frame
+    def feature_details_table():
+        df = slx_feature_details()
         return render.DataGrid(df, selection_mode="none", height="100%") if not df.empty else None
 
     @output
