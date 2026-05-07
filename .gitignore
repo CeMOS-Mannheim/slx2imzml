@@ -13,3 +13,5 @@ scilslab-8.1.123-cp312-cp312-win_amd64.whl
 .venv
 */__pycache__
 
+.venv/
+.vscode/
