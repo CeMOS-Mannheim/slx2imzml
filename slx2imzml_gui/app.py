@@ -142,12 +142,12 @@ app_ui = ui.page_sidebar(
                 ),
                 ui.output_data_frame("region_table"),
                 full_screen=True,
-                class_="flex-fill"
+                style="flex: 1 1 50%; min-height: 0;"
             ),
             ui.card(
                 output_widget("region_plot"),
                 full_screen=True,
-                class_="flex-fill"
+                style="flex: 1 1 50%; min-height: 0;"
             ),
             class_="d-flex flex-column h-100 gap-3"
         ),
@@ -161,13 +161,13 @@ app_ui = ui.page_sidebar(
                 ),
                 ui.output_data_frame("feature_table"),
                 full_screen=True,
-                class_="flex-fill"
+                style="flex: 1 1 50%; min-height: 0;"
             ),
             ui.card(
                 ui.card_header("Feature Details"),
                 ui.output_data_frame("feature_details_table"),
                 full_screen=True,
-                class_="flex-fill"
+                style="flex: 1 1 50%; min-height: 0;"
             ),
             class_="d-flex flex-column h-100 gap-3"
         ),
@@ -192,10 +192,16 @@ def server(input: Inputs, output: Outputs, session: Session):
     
     fig = go.FigureWidget()
     fig.update_layout(
-        yaxis=dict(autorange='reversed', title='Y Coordinates', showgrid=False, zeroline=False, scaleanchor='x', scaleratio=1),
-        xaxis=dict(title='X Coordinates', showgrid=False, zeroline=False),
+        yaxis=dict(
+            autorange='reversed', title=None, showticklabels=False, 
+            showgrid=False, zeroline=False, scaleanchor='x', scaleratio=1
+        ),
+        xaxis=dict(
+            title=None, showticklabels=False, 
+            showgrid=False, zeroline=False
+        ),
         showlegend=False,
-        margin=dict(l=20, r=20, t=40, b=20),
+        margin=dict(l=0, r=0, t=0, b=0),
         dragmode='pan', hovermode='closest',
         plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
     )
@@ -246,17 +252,44 @@ def server(input: Inputs, output: Outputs, session: Session):
                 slx_optical_image.set(process_optical_image(dataset))
                 
                 # 4. Load Regions
-                all_regions = dataset.get_region_tree().get_all_regions()
+                root_region = dataset.get_region_tree()
+                all_regions = root_region.get_all_regions()
                 print(f"Found {len(all_regions)} regions in total")
                 
-                def get_leaf_info(region):
-                    """Recursively gets all leaf IDs and names for a region."""
-                    if not region.subregions:
-                        return [(region.id, region.name)]
-                    leaves = []
-                    for sub in region.subregions:
-                        leaves.extend(get_leaf_info(sub))
-                    return leaves
+                # Performance Optimization: Single-pass recursive stats collection
+                # This avoids O(N^2) traversals and redundant API calls for folder spot counts
+                stats_cache = {}
+                def collect_stats(r):
+                    if r.id in stats_cache:
+                        return stats_cache[r.id]
+                    
+                    if not r.subregions:
+                        # Leaf node: get actual spots from API (or node if available)
+                        try:
+                            # Some API versions might have spots pre-populated
+                            if hasattr(r, 'spots') and isinstance(r.spots, dict) and 'spot_id' in r.spots:
+                                num_spots = len(r.spots['spot_id'])
+                            else:
+                                spots = dataset.get_region_spots(r.id)
+                                num_spots = len(spots.get('spot_id', [])) if isinstance(spots, dict) else 0
+                        except Exception:
+                            num_spots = 0
+                        res = ([(r.id, r.name)], num_spots)
+                    else:
+                        # Folder node: aggregate from children
+                        all_leaves, total_spots = [], 0
+                        for sub in r.subregions:
+                            leaves, spots = collect_stats(sub)
+                            all_leaves.extend(leaves)
+                            total_spots += spots
+                        res = (all_leaves, total_spots)
+                    
+                    stats_cache[r.id] = res
+                    return res
+
+                # Pre-calculate all stats
+                ui.notification_show("Analyzing region hierarchy...", type="message")
+                collect_stats(root_region)
 
                 cmap = plt.get_cmap('tab20')
                 regions_data, trace_data, styles = [], [], []
@@ -268,14 +301,12 @@ def server(input: Inputs, output: Outputs, session: Session):
                     if r.name == "Regions" and len(r.subregions) > 0:
                         continue
 
-                    # Calculate leaf expansion for this region
-                    leaf_info = get_leaf_info(r)
+                    # Use pre-calculated stats
+                    leaf_info, num_spots = stats_cache.get(r.id, ([], 0))
                     leaf_names = [info[1] for info in leaf_info]
                     leaf_ids = [str(info[0]) for info in leaf_info]
                     is_leaf = len(r.subregions) == 0
                     
-                    spots = dataset.get_region_spots(r.id)
-                    num_spots = len(spots.get('spot_id', [])) if isinstance(spots, dict) else 0
                     color = cmap(idx % 20)
                     hex_color = '#%02x%02x%02x' % (int(color[0]*255), int(color[1]*255), int(color[2]*255))
                     
@@ -314,14 +345,24 @@ def server(input: Inputs, output: Outputs, session: Session):
                             trace_idx += 1
                     idx += 1
                 
-                print(f"Loaded {len(regions_data)} total regions. {trace_idx} leaf traces created.")
+                # Perform bulk plot update in a single atomic operation
+                with fig.batch_update():
+                    # go.FigureWidget requires clearing and then adding traces in bulk
+                    # to avoid the 'permutation of a subset' validation error.
+                    fig.data = []
+                    if trace_data:
+                        fig.add_traces([go.Scatter(**td) for td in trace_data])
+                    
+                    # Also ensure layout (optical image) is updated here
+                    if slx_optical_image():
+                        fig.update_layout(images=[slx_optical_image()])
+
+                # Finalize by updating reactive states all at once
                 slx_regions.set(pd.DataFrame(regions_data))
                 slx_regions_styles.set(styles)
                 leaf_id_to_trace_index.set(leaf_mapping)
                 
-                with fig.batch_update():
-                    fig.data = []
-                    for td in trace_data: fig.add_trace(go.Scatter(**td))
+                print(f"Loaded {len(regions_data)} total regions. {len(trace_data)} leaf traces created.")
                 
             ui.notification_show("SCiLS file access successful. Please choose regions and feature lists to export.", type="message")
         except FileNotFoundError:
@@ -567,7 +608,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         if df.empty:
             return None
         # Set height to show ~10 rows at a time
-        return render.DataGrid(df, selection_mode="none", height="350px")
+        return render.DataGrid(df, selection_mode="none", height="100%")
 
     @output
     @render.ui
