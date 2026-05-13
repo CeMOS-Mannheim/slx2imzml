@@ -401,7 +401,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                 df["mz_center"] = (df["mz_low"] + df["mz_high"]) / 2
                 # Add mz width in ppm
                 # ppm = (delta_mz / mz_center) * 10^6
-                df["mz width"] = ((df["mz_high"] - df["mz_low"]) / df["mz_center"]) * 1e6
+                df["mz width [ppm]"] = ((df["mz_high"] - df["mz_low"]) / df["mz_center"]) * 1e6
                 
                 # Sort by mz_center
                 df = df.sort_values("mz_center")
@@ -410,11 +410,11 @@ def server(input: Inputs, output: Outputs, session: Session):
                 for col in ["mz_center", "mz_low", "mz_high"]:
                     if col in df.columns:
                         df[col] = df[col].round(4)
-                if "mz width" in df.columns:
-                    df["mz width"] = df["mz width"].round(1)
+                if "mz width [ppm]" in df.columns:
+                    df["mz width [ppm]"] = df["mz width [ppm]"].round(1)
                 
                 # Order columns as requested: id, name, mz_center, mz width, mz_low, mz_high
-                available_cols = [c for c in ["id", "name", "mz_center", "mz width", "mz_low", "mz_high"] if c in df.columns]
+                available_cols = [c for c in ["id", "name", "mz_center", "mz width [ppm]", "mz_low", "mz_high"] if c in df.columns]
                 slx_feature_details.set(df[available_cols])
             else:
                 slx_feature_details.set(pd.DataFrame())
