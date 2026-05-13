@@ -51,15 +51,7 @@ def select_file():
     root.destroy()
     return file_path
 
-def get_selection(input: Inputs, base_id: str):
-    """Retrieve selection indices from the confirmed _selected_rows attribute."""
-    try:
-        val = getattr(input, f"{base_id}_selected_rows", None)
-        if val is not None:
-            return val()
-    except Exception:
-        pass
-    return tuple()
+# Selection retrieval is now handled via the renderer's .cell_selection() method.
 
 def process_optical_image(dataset):
     """Extracts and processes the optical image from the SCiLS dataset for display."""
@@ -195,6 +187,8 @@ def server(input: Inputs, output: Outputs, session: Session):
     slx_spot_images = reactive.Value(pd.DataFrame())
     slx_feature_details = reactive.Value(pd.DataFrame())
     slx_optical_image = reactive.Value(None)
+    slx_features_cache = reactive.Value({})
+    leaf_id_to_trace_index = reactive.Value({})
     
     fig = go.FigureWidget()
     fig.update_layout(
@@ -237,6 +231,13 @@ def server(input: Inputs, output: Outputs, session: Session):
                     fl_display = fl_display.drop(columns=["has_external_features"])
                 slx_feature_lists.set(fl_display)
                 
+                # 1b. Cache all features for all lists to avoid re-opening the file later
+                print(f"Caching features for {len(fl)} lists...")
+                cache = {}
+                for list_id in fl["id"]:
+                    cache[list_id] = dataset.feature_table.get_features(list_id)
+                slx_features_cache.set(cache)
+                
                 # 2. Load Normalizations
                 normalizations = dataset.get_normalizations()
                 slx_spot_images.set(pd.DataFrame([{"name": name} for uid, name in normalizations.items()]))
@@ -248,44 +249,75 @@ def server(input: Inputs, output: Outputs, session: Session):
                 all_regions = dataset.get_region_tree().get_all_regions()
                 print(f"Found {len(all_regions)} regions in total")
                 
+                def get_leaf_info(region):
+                    """Recursively gets all leaf IDs and names for a region."""
+                    if not region.subregions:
+                        return [(region.id, region.name)]
+                    leaves = []
+                    for sub in region.subregions:
+                        leaves.extend(get_leaf_info(sub))
+                    return leaves
+
                 cmap = plt.get_cmap('tab20')
                 regions_data, trace_data, styles = [], [], []
                 
-                idx = 0
+                idx, trace_idx = 0, 0
+                leaf_mapping = {}
                 for r in all_regions:
-                    if len(r.subregions) == 0: # Leaf nodes only
-                        spots = dataset.get_region_spots(r.id)
-                        num_spots = len(spots.get('spot_id', [])) if isinstance(spots, dict) else 0
-                        color = cmap(idx % 20)
-                        hex_color = '#%02x%02x%02x' % (int(color[0]*255), int(color[1]*255), int(color[2]*255))
+                    # Skip the root "Regions" folder as it's redundant
+                    if r.name == "Regions" and len(r.subregions) > 0:
+                        continue
+
+                    # Calculate leaf expansion for this region
+                    leaf_info = get_leaf_info(r)
+                    leaf_names = [info[1] for info in leaf_info]
+                    leaf_ids = [str(info[0]) for info in leaf_info]
+                    is_leaf = len(r.subregions) == 0
+                    
+                    spots = dataset.get_region_spots(r.id)
+                    num_spots = len(spots.get('spot_id', [])) if isinstance(spots, dict) else 0
+                    color = cmap(idx % 20)
+                    hex_color = '#%02x%02x%02x' % (int(color[0]*255), int(color[1]*255), int(color[2]*255))
+                    
+                    regions_data.append({
+                        "Color": "", 
+                        "name": r.name, 
+                        "Type": "Leaf" if is_leaf else "Folder",
+                        "nPx": num_spots, 
+                        "subRegions": len(r.subregions),
+                        "leaf_names": ",".join(leaf_names),
+                        "leaf_ids": ",".join(leaf_ids)
+                    })
+                    styles.append({"rows": [idx], "cols": [0], "style": {"background-color": hex_color}})
+                    
+                    # Only plot polygons for LEAF regions to avoid redundant overlays
+                    if is_leaf and hasattr(r, 'polygons'):
+                        xs, ys = [], []
+                        for poly in r.polygons:
+                            if len(poly) > 0:
+                                poly_xs = [p.x for p in poly]
+                                poly_ys = [p.y for p in poly]
+                                # Close the polygon by repeating the first point
+                                poly_xs.append(poly_xs[0])
+                                poly_ys.append(poly_ys[0])
+                                xs.extend(poly_xs); xs.append(None)
+                                ys.extend(poly_ys); ys.append(None)
                         
-                        regions_data.append({"Color": "", "name": r.name, "nPx": num_spots, "subRegions": 0})
-                        styles.append({"rows": [idx], "cols": [0], "style": {"background-color": hex_color}})
-                        
-                        if hasattr(r, 'polygons'):
-                            xs, ys = [], []
-                            for poly in r.polygons:
-                                if len(poly) > 0:
-                                    poly_xs = [p.x for p in poly]
-                                    poly_ys = [p.y for p in poly]
-                                    # Close the polygon by repeating the first point
-                                    poly_xs.append(poly_xs[0])
-                                    poly_ys.append(poly_ys[0])
-                                    xs.extend(poly_xs); xs.append(None)
-                                    ys.extend(poly_ys); ys.append(None)
-                            
-                            if xs:
-                                trace_data.append(dict(
-                                    x=xs, y=ys, fill='toself', mode='lines',
-                                    line=dict(color=hex_color, width=3),
-                                    fillcolor=f'rgba({int(color[0]*255)}, {int(color[1]*255)}, {int(color[2]*255)}, 0.0)',
-                                    name=r.name, hoverinfo='name', hoverlabel=dict(namelength=-1)
-                                ))
-                        idx += 1
+                        if xs:
+                            trace_data.append(dict(
+                                x=xs, y=ys, fill='toself', mode='lines',
+                                line=dict(color=hex_color, width=3),
+                                fillcolor=f'rgba({int(color[0]*255)}, {int(color[1]*255)}, {int(color[2]*255)}, 0.0)',
+                                name=r.name, hoverinfo='name', hoverlabel=dict(namelength=-1)
+                            ))
+                            leaf_mapping[str(r.id)] = trace_idx
+                            trace_idx += 1
+                    idx += 1
                 
-                print(f"Loaded {len(regions_data)} leaf regions")
+                print(f"Loaded {len(regions_data)} total regions. {trace_idx} leaf traces created.")
                 slx_regions.set(pd.DataFrame(regions_data))
                 slx_regions_styles.set(styles)
+                leaf_id_to_trace_index.set(leaf_mapping)
                 
                 with fig.batch_update():
                     fig.data = []
@@ -305,18 +337,49 @@ def server(input: Inputs, output: Outputs, session: Session):
     def _update_ui_state():
         # Enable start button only if file and regions/features are selected
         try:
-            reg_sel = get_selection(input, "region_table")
-            feat_sel = get_selection(input, "feature_table")
+            reg_sel = region_table.cell_selection()["rows"]
+            feat_sel = feature_table.cell_selection()["rows"]
             ready = (slx_path() is not None and len(reg_sel) > 0 and len(feat_sel) > 0)
             ui.update_action_button("btn_process", disabled=not ready)
         except Exception:
             ui.update_action_button("btn_process", disabled=True)
 
+    # --- Button Handlers ---
+    @reactive.effect
+    @reactive.event(input.btn_regions_all)
+    async def _regions_all():
+        df = slx_regions()
+        if not df.empty:
+            await region_table.update_cell_selection({"type": "row", "rows": list(range(len(df)))})
+
+    @reactive.effect
+    @reactive.event(input.btn_regions_none)
+    async def _regions_none():
+        await region_table.update_cell_selection({"type": "row", "rows": []})
+
+    @reactive.effect
+    @reactive.event(input.btn_features_all)
+    async def _features_all():
+        df = slx_feature_lists()
+        if not df.empty:
+            await feature_table.update_cell_selection({"type": "row", "rows": list(range(len(df)))})
+
+    @reactive.effect
+    @reactive.event(input.btn_features_none)
+    async def _features_none():
+        await feature_table.update_cell_selection({"type": "row", "rows": []})
+
     @reactive.effect
     def _update_feature_details():
-        selected_indices = get_selection(input, "feature_table")
+        try:
+            selected_indices = feature_table.cell_selection()["rows"]
+        except Exception:
+            selected_indices = []
+            
         path = slx_path()
-        if not path or not selected_indices:
+        cache = slx_features_cache()
+        
+        if not path or not selected_indices or not cache:
             slx_feature_details.set(pd.DataFrame())
             return
 
@@ -324,48 +387,70 @@ def server(input: Inputs, output: Outputs, session: Session):
         selected_ids = fl_df.iloc[list(selected_indices)]["id"].tolist()
         
         try:
-            with sl.LocalSession(path) as slx_file:
-                dataset = slx_file.dataset_proxy
-                all_features = []
-                for list_id in selected_ids:
-                    features = dataset.feature_table.get_features(list_id)
-                    all_features.append(features)
+            all_features = []
+            for list_id in selected_ids:
+                if list_id in cache:
+                    all_features.append(cache[list_id])
+            
+            if all_features:
+                df = pd.concat(all_features, ignore_index=True)
+                # Remove duplicates as some list might overlap (e.g. "All features" vs sub-list)
+                df = df.drop_duplicates(subset=["id"])
                 
-                if all_features:
-                    df = pd.concat(all_features, ignore_index=True)
-                    # Add mz_center/centroid for convenience
-                    df["mz_center"] = (df["mz_low"] + df["mz_high"]) / 2
-                    # Add mz width in ppm
-                    # ppm = (delta_mz / mz_center) * 10^6
-                    df["mz width"] = ((df["mz_high"] - df["mz_low"]) / df["mz_center"]) * 1e6
-                    
-                    # Sort by mz_center
-                    df = df.sort_values("mz_center")
+                # Add mz_center/centroid for convenience
+                df["mz_center"] = (df["mz_low"] + df["mz_high"]) / 2
+                # Add mz width in ppm
+                # ppm = (delta_mz / mz_center) * 10^6
+                df["mz width"] = ((df["mz_high"] - df["mz_low"]) / df["mz_center"]) * 1e6
+                
+                # Sort by mz_center
+                df = df.sort_values("mz_center")
 
-                    # Round values for display: 4 digits for mz, 1 digit for ppm
-                    for col in ["mz_center", "mz_low", "mz_high"]:
-                        if col in df.columns:
-                            df[col] = df[col].round(4)
-                    if "mz width" in df.columns:
-                        df["mz width"] = df["mz width"].round(1)
-                    
-                    # Order columns as requested: id, name, mz_center, mz width, mz_low, mz_high
-                    available_cols = [c for c in ["id", "name", "mz_center", "mz width", "mz_low", "mz_high"] if c in df.columns]
-                    slx_feature_details.set(df[available_cols])
-                else:
-                    slx_feature_details.set(pd.DataFrame())
+                # Round values for display: 4 digits for mz, 1 digit for ppm
+                for col in ["mz_center", "mz_low", "mz_high"]:
+                    if col in df.columns:
+                        df[col] = df[col].round(4)
+                if "mz width" in df.columns:
+                    df["mz width"] = df["mz width"].round(1)
+                
+                # Order columns as requested: id, name, mz_center, mz width, mz_low, mz_high
+                available_cols = [c for c in ["id", "name", "mz_center", "mz width", "mz_low", "mz_high"] if c in df.columns]
+                slx_feature_details.set(df[available_cols])
+            else:
+                slx_feature_details.set(pd.DataFrame())
         except Exception as e:
-            print(f"Error fetching feature details: {e}")
+            print(f"Error updating feature details from cache: {e}")
             slx_feature_details.set(pd.DataFrame())
 
     @reactive.effect
     def _update_plot_selection():
-        selected = get_selection(input, "region_table")
+        try:
+            selected_rows = region_table.cell_selection()["rows"]
+            reg_df = slx_regions()
+            mapping = leaf_id_to_trace_index()
+        except Exception:
+            selected_rows = []
+            reg_df = pd.DataFrame()
+            mapping = {}
+            
+        # Expand selected rows to unique leaf IDs
+        selected_leaf_ids = set()
+        if not reg_df.empty and selected_rows:
+            for idx in selected_rows:
+                ids_str = reg_df.iloc[idx].get("leaf_ids", "")
+                if ids_str:
+                    for lid in ids_str.split(","):
+                        selected_leaf_ids.add(lid.strip())
+        
+        # Determine which traces to highlight once
+        target_trace_indices = {mapping[lid] for lid in selected_leaf_ids if lid in mapping}
+
         with fig.batch_update():
             for i, trace in enumerate(fig.data):
                 c = trace.line.color
                 r_val, g_val, b_val = (int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16)) if c.startswith('#') else (128,128,128)
-                if i in selected:
+                
+                if i in target_trace_indices:
                     trace.line.width = 5
                     trace.fillcolor = f"rgba({r_val}, {g_val}, {b_val}, 0.5)"
                 else:
@@ -377,18 +462,28 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.event(input.btn_process)
     def _run_export():
         path = slx_path()
-        selected_region_indices = get_selection(input, "region_table")
-        selected_feature_indices = get_selection(input, "feature_table")
+        try:
+            selected_region_indices = region_table.cell_selection()["rows"]
+            selected_feature_indices = feature_table.cell_selection()["rows"]
+        except Exception:
+            selected_region_indices = []
+            selected_feature_indices = []
         
         if not path or not selected_region_indices:
             ui.notification_show("Please select at least one region.", type="warning")
             return
             
         ui.notification_show("Starting export. This might take a while. Please wait...", type="message")
-        
         try:
             reg_df, feat_df = slx_regions(), slx_feature_lists()
-            sel_regions = reg_df.iloc[list(selected_region_indices)]["name"].tolist()
+            
+            # Expand parent regions to leaf names
+            all_selected_leaves = set()
+            for idx in selected_region_indices:
+                leaves_str = reg_df.iloc[idx]["leaf_names"]
+                all_selected_leaves.update(leaves_str.split(","))
+            
+            sel_regions = list(all_selected_leaves)
             sel_features = feat_df.iloc[list(selected_feature_indices)]["name"].tolist()
         except (KeyError, IndexError) as e:
             ui.notification_show(f"Selection data error: Could not find metadata. ({e})", type="error")
@@ -399,13 +494,14 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         # Prepare JSON context
         data = {
-            "description": "SCiLs-2-ImzML::@::Cemos", "version": "0.1", "date": str(datetime.datetime.now()),
+            "description": "SCiLS-2-ImzML::@::Cemos", "version": "0.1", "date": str(datetime.datetime.now()),
             "data_exports": [{
                 "filename": path, "outputpath": None, "slice_thickness": input.slice_thickness(),
                 "spot_images": None, "optical_images": None, "featurelists": sel_features,
                 "regions": sel_regions, "regions_as_labels": None, "labels": None
             }]
         }
+
         
         json_file = os.path.join(os.path.dirname(path), f"{pathlib.Path(path).stem}.json")
         with open(json_file, 'w', encoding='utf-8') as f:
@@ -438,7 +534,12 @@ def server(input: Inputs, output: Outputs, session: Session):
     @render.data_frame
     def region_table():
         df = slx_regions()
-        return render.DataGrid(df, selection_mode="rows", styles=slx_regions_styles(), height="100%") if not df.empty else None
+        if df.empty:
+            return None
+        # Drop internal columns for display
+        cols_to_drop = ["leaf_names", "leaf_ids"]
+        display_df = df.drop(columns=[c for c in cols_to_drop if c in df.columns])
+        return render.DataGrid(display_df, selection_mode="rows", styles=slx_regions_styles(), height="100%")
         
     @output
     @render_widget
@@ -463,20 +564,43 @@ def server(input: Inputs, output: Outputs, session: Session):
     @render.data_frame
     def feature_details_table():
         df = slx_feature_details()
-        return render.DataGrid(df, selection_mode="none", height="100%") if not df.empty else None
+        if df.empty:
+            return None
+        # Set height to show ~10 rows at a time
+        return render.DataGrid(df, selection_mode="none", height="350px")
 
     @output
     @render.ui
     def ui_selection_status():
         try:
-            r, f = get_selection(input, "region_table"), get_selection(input, "feature_table")
+            r = region_table.cell_selection()["rows"]
+            f = feature_table.cell_selection()["rows"]
             reg_df, feat_df = slx_regions(), slx_feature_lists()
-            sel_regions = reg_df.iloc[list(r)]["name"].tolist() if not reg_df.empty and r else []
+            
+            # Expand selected regions to leaf names for status display
+            all_selected_leaves = set()
+            if not reg_df.empty and r:
+                for idx in r:
+                    leaves_str = reg_df.iloc[idx]["leaf_names"]
+                    all_selected_leaves.update(leaves_str.split(","))
+            
+            sel_regions = list(all_selected_leaves)
             sel_features = feat_df.iloc[list(f)]["name"].tolist() if not feat_df.empty and f else []
+            
+            num_leaves = len(sel_regions)
+            if num_leaves <= 10:
+                regions_text = ", ".join(sel_regions)
+            else:
+                regions_text = ", ".join(sel_regions[:7]) + ", ..., " + ", ".join(sel_regions[-3:])
             
             return ui.div(
                 ui.h6("Currently Selected:", class_="fw-bold mb-2"),
-                ui.div(ui.span("Regions:", class_="fw-semibold me-2"), ui.span(", ".join(sel_regions) or "None", class_="text-muted"), class_="mb-1 text-break"),
+                ui.div(
+                    ui.span("Regions:", class_="fw-semibold me-2"), 
+                    ui.span(regions_text or "None", class_="text-muted"), 
+                    ui.span(f" ({num_leaves} total leaf regions)" if num_leaves > 0 else "", class_="small text-primary ms-2"),
+                    class_="mb-1 text-break"
+                ),
                 ui.div(ui.span("Features:", class_="fw-semibold me-2"), ui.span(", ".join(sel_features) or "None", class_="text-muted"), class_="text-break"),
                 class_="mt-3 mb-3 p-3 border rounded bg-light"
             )
