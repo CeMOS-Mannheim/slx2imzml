@@ -131,6 +131,28 @@ app_ui = ui.page_sidebar(
         title="SCiLS Exporter Controls",
         width="20%",
     ),
+    ui.head_content(
+        ui.tags.style("""
+            /* Region Table Optimization (Native Table Logic) */
+            #region_table table { table-layout: auto !important; width: 100% !important; }
+            
+            /* Shrink-wrap technical columns: Color, Type, nPx, subRegions */
+            #region_table th:nth-child(1), #region_table td:nth-child(1),
+            #region_table th:nth-child(3), #region_table td:nth-child(3),
+            #region_table th:nth-child(4), #region_table td:nth-child(4),
+            #region_table th:nth-child(5), #region_table td:nth-child(5) { 
+                width: 1% !important; 
+                white-space: nowrap !important; 
+            }
+            
+            /* Greedy Name column: Expands to fill, wraps only if necessary */
+            #region_table th:nth-child(2), #region_table td:nth-child(2) { 
+                width: auto !important; 
+                white-space: normal !important; 
+                word-break: break-word !important;
+            }
+        """)
+    ),
     ui.layout_columns(
         ui.div(
             ui.card(
@@ -294,6 +316,8 @@ def server(input: Inputs, output: Outputs, session: Session):
                 cmap = plt.get_cmap('tab20')
                 regions_data, trace_data, styles = [], [], []
                 
+                # Base styles for column widths are now handled via CSS for better reliability
+                # but we still use the styles list for row-specific colors.
                 idx, trace_idx = 0, 0
                 leaf_mapping = {}
                 for r in all_regions:
@@ -303,21 +327,27 @@ def server(input: Inputs, output: Outputs, session: Session):
 
                     # Use pre-calculated stats
                     leaf_info, num_spots = stats_cache.get(r.id, ([], 0))
-                    leaf_names = [info[1] for info in leaf_info]
+                    
+                    # Original names for backend/CLI
+                    full_leaf_names = [info[1] for info in leaf_info]
                     leaf_ids = [str(info[0]) for info in leaf_info]
                     is_leaf = len(r.subregions) == 0
+                    
+                    # Cleaned name for display
+                    display_name = r.name[8:] if r.name.startswith("Regions/") else r.name
                     
                     color = cmap(idx % 20)
                     hex_color = '#%02x%02x%02x' % (int(color[0]*255), int(color[1]*255), int(color[2]*255))
                     
                     regions_data.append({
                         "Color": "", 
-                        "name": r.name, 
+                        "name": display_name, 
                         "Type": "Leaf" if is_leaf else "Folder",
                         "nPx": num_spots, 
                         "subRegions": len(r.subregions),
-                        "leaf_names": ",".join(leaf_names),
-                        "leaf_ids": ",".join(leaf_ids)
+                        "leaf_names": ",".join(full_leaf_names), # CLI expects original names
+                        "leaf_ids": ",".join(leaf_ids),
+                        "full_name": r.name # Keep original for reference
                     })
                     styles.append({"rows": [idx], "cols": [0], "style": {"background-color": hex_color}})
                     
@@ -578,7 +608,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         if df.empty:
             return None
         # Drop internal columns for display
-        cols_to_drop = ["leaf_names", "leaf_ids"]
+        cols_to_drop = ["leaf_names", "leaf_ids", "full_name"]
         display_df = df.drop(columns=[c for c in cols_to_drop if c in df.columns])
         return render.DataGrid(display_df, selection_mode="rows", styles=slx_regions_styles(), height="100%")
         
@@ -628,11 +658,14 @@ def server(input: Inputs, output: Outputs, session: Session):
             sel_regions = list(all_selected_leaves)
             sel_features = feat_df.iloc[list(f)]["name"].tolist() if not feat_df.empty and f else []
             
-            num_leaves = len(sel_regions)
-            if num_leaves <= 10:
-                regions_text = ", ".join(sel_regions)
+            # Clean names for display
+            sel_regions_display = [n[8:] if n.startswith("Regions/") else n for n in sel_regions]
+            
+            num_leaves = len(sel_regions_display)
+            if num_leaves <= 5:
+                regions_text = ", ".join(sel_regions_display)
             else:
-                regions_text = ", ".join(sel_regions[:7]) + ", ..., " + ", ".join(sel_regions[-3:])
+                regions_text = ", ".join(sel_regions_display[:3]) + ", ..., " + ", ".join(sel_regions_display[-2:])
             
             return ui.div(
                 ui.h6("Currently Selected:", class_="fw-bold mb-2"),
