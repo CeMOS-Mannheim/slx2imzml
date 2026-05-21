@@ -162,6 +162,7 @@ app_ui = ui.page_sidebar(
                     ui.input_action_button("btn_regions_none", "Clear", class_="btn-sm"),
                     class_="d-flex gap-2 mb-2"
                 ),
+                ui.input_switch("folder_as_unit", "Export Folders as Unit", value=False),
                 ui.output_data_frame("region_table"),
                 full_screen=True,
                 style="flex: 1 1 50%; min-height: 0;"
@@ -548,13 +549,17 @@ def server(input: Inputs, output: Outputs, session: Session):
         try:
             reg_df, feat_df = slx_regions(), slx_feature_lists()
             
-            # Expand parent regions to leaf names
-            all_selected_leaves = set()
+            # Expand regions based on selection mode
+            folder_as_unit = input.folder_as_unit()
+            all_selected_regions = set()
             for idx in selected_region_indices:
-                leaves_str = reg_df.iloc[idx]["leaf_names"]
-                all_selected_leaves.update(leaves_str.split(","))
+                row = reg_df.iloc[idx]
+                if row["Type"] == "Folder" and folder_as_unit:
+                    all_selected_regions.add(row["full_name"])
+                else:
+                    all_selected_regions.update(row["leaf_names"].split(","))
             
-            sel_regions = list(all_selected_leaves)
+            sel_regions = list(all_selected_regions)
             sel_features = feat_df.iloc[list(selected_feature_indices)]["name"].tolist()
         except (KeyError, IndexError) as e:
             ui.notification_show(f"Selection data error: Could not find metadata. ({e})", type="error")
@@ -648,31 +653,36 @@ def server(input: Inputs, output: Outputs, session: Session):
             f = feature_table.cell_selection()["rows"]
             reg_df, feat_df = slx_regions(), slx_feature_lists()
             
-            # Expand selected regions to leaf names for status display
-            all_selected_leaves = set()
+            # Expand selected regions for status display (respects folder_as_unit toggle)
+            folder_as_unit = input.folder_as_unit()
+            all_selected_regions = set()
             if not reg_df.empty and r:
                 for idx in r:
-                    leaves_str = reg_df.iloc[idx]["leaf_names"]
-                    all_selected_leaves.update(leaves_str.split(","))
+                    row = reg_df.iloc[idx]
+                    if row["Type"] == "Folder" and folder_as_unit:
+                        all_selected_regions.add(row["full_name"])
+                    else:
+                        all_selected_regions.update(row["leaf_names"].split(","))
             
-            sel_regions = list(all_selected_leaves)
+            sel_regions = list(all_selected_regions)
             sel_features = feat_df.iloc[list(f)]["name"].tolist() if not feat_df.empty and f else []
             
             # Clean names for display
             sel_regions_display = [n[8:] if n.startswith("Regions/") else n for n in sel_regions]
             
-            num_leaves = len(sel_regions_display)
-            if num_leaves <= 5:
+            num_regions = len(sel_regions_display)
+            if num_regions <= 5:
                 regions_text = ", ".join(sel_regions_display)
             else:
                 regions_text = ", ".join(sel_regions_display[:3]) + ", ..., " + ", ".join(sel_regions_display[-2:])
             
+            region_count_label = "total regions" if input.folder_as_unit() else "total leaf regions"
             return ui.div(
                 ui.h6("Currently Selected:", class_="fw-bold mb-2"),
                 ui.div(
                     ui.span("Regions:", class_="fw-semibold me-2"), 
                     ui.span(regions_text or "None", class_="text-muted"), 
-                    ui.span(f" ({num_leaves} total leaf regions)" if num_leaves > 0 else "", class_="small text-primary ms-2"),
+                    ui.span(f" ({num_regions} {region_count_label})" if num_regions > 0 else "", class_="small text-primary ms-2"),
                     class_="mb-1 text-break"
                 ),
                 ui.div(ui.span("Features:", class_="fw-semibold me-2"), ui.span(", ".join(sel_features) or "None", class_="text-muted"), class_="text-break"),

@@ -176,7 +176,10 @@ class slxFileHelper:
         return slxFileHelper._get_geometry_from_px2world(transformation, slice_thickness)
 
     @staticmethod
-    def load_region_data_as_continuous_centroids(dataset: sl.DatasetProxy, r_name: str, r_id: int, features: np.ndarray) -> np.ndarray:
+    def load_region_data_as_continuous_centroids(
+        dataset: sl.DatasetProxy, r_name: str, r_id: int, features: np.ndarray,
+        W_global: int, H_global: int, mappings: list
+    ) -> np.ndarray:
         """
         Load region spectral data as continuous centroid format.
         
@@ -188,33 +191,43 @@ class slxFileHelper:
             r_name: Name of the region to process
             r_id: ID of the region to process
             features: Array of features with columns [id, mz_low, mz_high, centroid]
+            W_global: Global grid width
+            H_global: Global grid height
+            mappings: List of subregion mappings (offsets and shapes)
             
         Returns:
-            np.ndarray: 4D array with shape (x, y, z, features) containing intensity data
+            np.ndarray: 4D array with shape (y, x, z, features) containing intensity data
             
         Raises:
-            ValueError: If multiple ion images found for the same feature
+            ValueError: If unexpected number of ion images found
         """
         print(f"Loading region data as centroids: {r_name} (ID: {r_id})")
         
-        I = dataset.get_index_images(r_id)[0]
         # x,y,z + s
-        data = np.zeros((I.values.shape[0], I.values.shape[1], 1, features.shape[0]))
+        data = np.full((H_global, W_global, 1, features.shape[0]), np.nan)
         
         for f_index, (_, f_mz_low, f_mz_high, _) in enumerate(features):
             ionimage_list = dataset.get_ion_images(f_mz_low, f_mz_high, r_id)
-            if len(ionimage_list) == 1:
-                data[:, :, 0, f_index] = ionimage_list[0].values
+            if len(ionimage_list) == len(mappings):
+                for mapping in mappings:
+                    idx = mapping["index"]
+                    offset_x = mapping["offset_x"]
+                    offset_y = mapping["offset_y"]
+                    img = ionimage_list[idx]
+                    H_sub, W_sub = mapping["shape"]
+                    
+                    data[offset_y:offset_y+H_sub, offset_x:offset_x+W_sub, 0, f_index] = img.values
             else:
-                # Optionally, use logging here instead of print for production code
-                # import logging
-                # logging.warning(f"Multiple ion images found for the same feature: {len(ionimage_list)}")
-                raise ValueError("Multiple ion images found for the same feature! "
-                                    "This is not supported currently.")
+                raise ValueError(
+                    f"Unexpected number of ion images found: expected {len(mappings)}, got {len(ionimage_list)}"
+                )
         return data
     
     @staticmethod
-    def load_region_data_as_continuous_profile(dataset: sl.DatasetProxy, r_name: str, r_id: int) -> tuple[np.ndarray, np.ndarray]:
+    def load_region_data_as_continuous_profile(
+        dataset: sl.DatasetProxy, r_name: str, r_id: int,
+        W_global: int, H_global: int, mappings: list
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         Load region spectral data as continuous profile format.
         
@@ -226,45 +239,62 @@ class slxFileHelper:
             dataset: SCiLS Lab dataset proxy
             r_name: Name of the region to process
             r_id: ID of the region to process
+            W_global: Global grid width
+            H_global: Global grid height
+            mappings: List of subregion mappings (offsets and shapes)
             
         Returns:
             tuple: (mz_axis, intensity_data) where:
                 - mz_axis: 1D array of m/z values
-                - intensity_data: 4D array with shape (x, y, z, mz_points)
+                - intensity_data: 4D array with shape (y, x, z, mz_points)
         """
         print(f"Loading region data as profile: {r_name} (ID: {r_id})")
         
-        I = dataset.get_index_images(r_id)[0]
-        un = sorted(np.unique(I.values))
-        un.pop(0)
+        index_images = dataset.get_index_images(r_id)
+        all_unique_spot_ids = []
+        for img in index_images:
+            un = sorted(np.unique(img.values))
+            if un and un[0] == -1:
+                un.pop(0)
+            all_unique_spot_ids.extend(un)
+            
+        all_unique_spot_ids = sorted(list(set(all_unique_spot_ids)))
         
-        ds = dataset.get_spectrum(0, rebinned=True)
-        
+        if not all_unique_spot_ids:
+            raise ValueError(f"No valid spot IDs found in region {r_name}")
+            
+        ds = dataset.get_spectrum(all_unique_spot_ids[0], rebinned=True)
         xs = ds['mz']
-        ys = ds['intensities']
-        
-        # print(I.values.shape, xs)
-        
-        # Create a boolean mask that is True where the array's element is in the values list
-        mask = np.isin(I.values, un)
-
-        # Use np.where to get the row and column indices where the mask is True
-        rows, cols = np.where(mask)
-        
         
         # x,y,z + s
-        data = np.zeros((I.values.shape[0], I.values.shape[1], 1, xs.shape[0]))
-        progress = 0
-        for i, (sid, x, y) in enumerate(zip(un, rows, cols)):
-            ds = dataset.get_spectrum(sid, rebinned=True)
-            ys = ds['intensities']
-            if np.sum(ys) == 0:
-                continue
+        data = np.full((H_global, W_global, 1, xs.shape[0]), np.nan)
+        total_spots = len(all_unique_spot_ids)
+        spots_processed = 0
+        
+        for mapping in mappings:
+            idx = mapping["index"]
+            offset_x = mapping["offset_x"]
+            offset_y = mapping["offset_y"]
+            img = index_images[idx]
             
-            data[x, y, 0, :] = ys
-            progress = (i + 1) / len(un) * 100
-            print(f'Progress: {progress:.1f}%', end='\r')
+            mask = img.values >= 0
+            rows, cols = np.where(mask)
+            spot_ids = img.values[mask]
             
+            for y, x, sid in zip(rows, cols, spot_ids):
+                ds = dataset.get_spectrum(sid, rebinned=True)
+                ys = ds['intensities']
+                if np.sum(ys) == 0:
+                    continue
+                
+                gx = offset_x + x
+                gy = offset_y + y
+                data[gy, gx, 0, :] = ys
+                
+                spots_processed += 1
+                progress = (spots_processed) / total_spots * 100
+                print(f'Progress: {progress:.1f}%', end='\r')
+                
         print()  # New line after progress is complete
         return xs, data
     
@@ -312,7 +342,10 @@ class slxFileHelper:
         return spacing
 
     @staticmethod
-    def load_regions_as_labels(dataset: sl.DatasetProxy, r_id: int, final_regions_as_labels: list, slice_thickness: float) -> sitk.Image:
+    def load_regions_as_labels(
+        dataset: sl.DatasetProxy, r_id: int, final_regions_as_labels: list, slice_thickness: float,
+        W_global: int = None, H_global: int = None, mappings: list = None
+    ) -> sitk.Image:
         """
         Load multiple regions as a multi-label image.
         
@@ -323,19 +356,35 @@ class slxFileHelper:
             dataset: SCiLS Lab dataset proxy
             r_id: Base region ID for spatial reference
             final_regions_as_labels: List of [name, id] pairs for regions to include
-            slice_thickness: Z-axis slice thickness (currently unused)
+            slice_thickness: Z-axis slice thickness
+            W_global: Global grid width (optional)
+            H_global: Global grid height (optional)
+            mappings: Subregion mappings (optional)
             
         Returns:
             sitk.Image: SimpleITK image with labeled regions
         """
-        index_image = dataset.get_index_images(r_id)[0]
+        if W_global is None or H_global is None or mappings is None:
+            _, _, _, W_global, H_global, mappings = slxFileHelper.get_combined_geometry(dataset, r_id, slice_thickness)
+            
+        index_images = dataset.get_index_images(r_id)
         current_label_value = 1
-        labeled_array = np.zeros_like(index_image.values, dtype=np.ushort)
+        labeled_array = np.zeros((H_global, W_global), dtype=np.ushort)
 
         for rl_name, rl_id in final_regions_as_labels:
             labeled_region = dataset.get_region_spots(rl_id)
-            spot_ids = list(labeled_region["spot_id"])
-            labeled_array[np.isin(index_image.values, spot_ids)] = current_label_value
+            spot_ids = set(labeled_region["spot_id"])
+            
+            for mapping in mappings:
+                idx = mapping["index"]
+                offset_x = mapping["offset_x"]
+                offset_y = mapping["offset_y"]
+                img = index_images[idx]
+                
+                mask = np.isin(img.values, list(spot_ids))
+                H_sub, W_sub = mapping["shape"]
+                labeled_array[offset_y:offset_y+H_sub, offset_x:offset_x+W_sub][mask] = current_label_value
+                
             current_label_value += 1
 
         # Convert to SimpleITK image with proper orientation
@@ -344,7 +393,10 @@ class slxFileHelper:
     
 
     @staticmethod
-    def load_spot_images(dataset: sl.DatasetProxy, r_name: str, r_id: int, spot_images: list, slice_thickness: float) -> list:
+    def load_spot_images(
+        dataset: sl.DatasetProxy, r_name: str, r_id: int, spot_images: list, slice_thickness: float,
+        W_global: int = None, H_global: int = None, mappings: list = None
+    ) -> list:
         """
         Load spot images (normalizations, etc.) for a specific region.
         
@@ -356,22 +408,40 @@ class slxFileHelper:
             r_name: Name of the region (for logging)
             r_id: ID of the region to process
             spot_images: List of [name, id] pairs for spot images to load
-            slice_thickness: Z-axis slice thickness (currently unused)
+            slice_thickness: Z-axis slice thickness
+            W_global: Global grid width (optional)
+            H_global: Global grid height (optional)
+            mappings: Subregion mappings (optional)
             
         Returns:
             list: List of [name, sitk.Image] pairs containing the loaded spot images
         """
-        index_image = dataset.get_index_images(r_id)[0]
-        mask_foreground = index_image.values >= 0
-        mask_indices = index_image.values[mask_foreground].astype(np.int32)
+        if W_global is None or H_global is None or mappings is None:
+            _, _, _, W_global, H_global, mappings = slxFileHelper.get_combined_geometry(dataset, r_id, slice_thickness)
+            
+        index_images = dataset.get_index_images(r_id)
         
         spot_image_list = []
         for s_name, s_id in spot_images:
             print(f"Loading spot image: {s_name} (ID: {s_id}) for region: {r_name} (ID: {r_id})")
             spot_image = dataset.get_spot_image(s_id)
-            # Create spatial array matching the region dimensions
-            spatial_array = np.zeros(index_image.values.shape[:3])
-            spatial_array[mask_foreground] = spot_image.values[mask_indices]
+            
+            # Create spatial array matching the global dimensions
+            spatial_array = np.zeros((H_global, W_global))
+            
+            for mapping in mappings:
+                idx = mapping["index"]
+                offset_x = mapping["offset_x"]
+                offset_y = mapping["offset_y"]
+                img = index_images[idx]
+                
+                mask_foreground = img.values >= 0
+                mask_indices = img.values[mask_foreground].astype(np.int32)
+                
+                rows, cols = np.where(mask_foreground)
+                global_rows = offset_y + rows
+                global_cols = offset_x + cols
+                spatial_array[global_rows, global_cols] = spot_image.values[mask_indices]
             
             if "Total Ion Count" in s_name:
                 s_name = "TIC"
@@ -445,6 +515,78 @@ class slxFileHelper:
         return optical_image_list
 
     @staticmethod
+    def get_combined_geometry(dataset: sl.DatasetProxy, r_id: int, slice_thickness: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, int, list]:
+        """
+        Calculates the global bounding box and combined geometry for a region (leaf or folder).
+        
+        Args:
+            dataset: SCiLS Lab dataset proxy
+            r_id: Region ID (could be leaf or folder)
+            slice_thickness: Z-axis slice thickness in micrometers
+            
+        Returns:
+            tuple: (spacing, origin_global, direction, W_global, H_global, subregion_mappings)
+                where:
+                - spacing: 3D pixel spacing [sx, sy, sz] in millimeters
+                - origin_global: 3D origin [ox, oy, oz] in millimeters representing global top-left
+                - direction: 3x3 direction matrix
+                - W_global: global grid width
+                - H_global: global grid height
+                - subregion_mappings: list of dicts with offset and shape keys
+        """
+        index_images = dataset.get_index_images(r_id)
+        if not index_images:
+            raise ValueError(f"No index images found for region ID: {r_id}")
+            
+        # All subregions share spacing and direction, so extract from the first
+        spacing, origin_0, direction = slxFileHelper.get_geometry_from_transformation(
+            index_images[0].transformation, slice_thickness
+        )
+        sx, sy, _ = spacing
+        
+        # Calculate world bounds over all subregions
+        global_min_x = float('inf')
+        global_max_x = float('-inf')
+        global_min_y = float('inf')
+        global_max_y = float('-inf')
+        
+        for img in index_images:
+            H, W = img.values.shape
+            origin = img.transformation[:3, 3] / 1000.0  # in mm
+            ox, oy = origin[0], origin[1]
+            
+            x0 = ox
+            x1 = ox + (W - 1) * sx
+            global_min_x = min(global_min_x, x0, x1)
+            global_max_x = max(global_max_x, x0, x1)
+            
+            y0 = oy
+            y1 = oy - (H - 1) * sy
+            global_min_y = min(global_min_y, y0, y1)
+            global_max_y = max(global_max_y, y0, y1)
+            
+        origin_global = np.array([global_min_x, global_max_y, origin_0[2]], dtype=np.float64)
+        
+        W_global = int(round((global_max_x - global_min_x) / sx)) + 1
+        H_global = int(round((global_max_y - global_min_y) / sy)) + 1
+        
+        subregion_mappings = []
+        for idx, img in enumerate(index_images):
+            ox, oy = img.transformation[0, 3] / 1000.0, img.transformation[1, 3] / 1000.0
+            offset_x = int(round((ox - global_min_x) / sx))
+            offset_y = int(round((global_max_y - oy) / sy))
+            
+            subregion_mappings.append({
+                "index": idx,
+                "offset_x": offset_x,
+                "offset_y": offset_y,
+                "shape": img.values.shape,
+                "transformation": img.transformation
+            })
+            
+        return spacing, origin_global, direction, W_global, H_global, subregion_mappings
+
+    @staticmethod
     def _match_regions_by_name(region: sl.RegionTree, query_regions: list) -> bool:
         """
         Check if a region matches the query criteria.
@@ -461,21 +603,29 @@ class slxFileHelper:
         Returns:
             bool: True if the region matches the criteria, False otherwise
         """
-        # Skip regions that have subregions (only process leaf nodes)
-        if len(region.subregions):
-            return False
-        
-        # If no specific regions requested, include all leaf regions
+        # If no specific regions requested, include all leaf regions (folders are skipped
+        # unless explicitly named in query_regions)
         if query_regions is None or len(query_regions) == 0:
+            # Default behaviour: only include leaf nodes
+            return len(region.subregions) == 0
+        
+        # Check for exact name matches
+        if region.name in query_regions:
             return True
         
         # Check for regex pattern matches
         for pattern in query_regions:
-            if re.search(pattern, region.name):
-                return True
-        
-        # Check for exact name matches
-        return region.name in query_regions
+            # If the region is a subregion of the pattern (meaning region.name starts with pattern + "/"),
+            # we do not want the pattern to match it (unless the subregion itself is in query_regions,
+            # which is handled by the exact match above).
+            if region.name.startswith(pattern + "/"):
+                continue
+            try:
+                if re.search(pattern, region.name):
+                    return True
+            except re.error:
+                pass
+        return False
 
     def load_export_info(self) -> dict:
         """

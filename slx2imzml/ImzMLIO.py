@@ -111,15 +111,15 @@ def main():
                 # Create output directory structure
                 (pathlib.Path(outputpath) / filename_without_extension / r_name).parent.mkdir(parents=True, exist_ok=True)
 
-                # Extract spatial transformation information from the region
-                transformation = dataset.get_index_images(r_id)[0].transformation
-                spacing, origin, direction = slxFileHelper.get_geometry_from_transformation(
-                    transformation, slice_thickness
+                # Extract combined geometry and subregion mapping information from the region
+                spacing, origin, direction, W_global, H_global, mappings = slxFileHelper.get_combined_geometry(
+                    dataset, r_id, slice_thickness
                 )
                 
                 print(f"Pixel spacing: {spacing}")
                 print(f"Origin: {origin}")
                 print(f"Direction matrix: {direction}")
+                print(f"Global dimensions: {W_global}x{H_global}")
 
                 def set_image_properties(image: sitk.Image, transpose_xy: bool = False) -> sitk.Image:
                     """
@@ -151,29 +151,20 @@ def main():
                 # Export region masks as multi-label NRRD image
                 if final_regions_as_labels:
                     rlImage = slxFileHelper.load_regions_as_labels(
-                        dataset, r_id, final_regions_as_labels, slice_thickness
+                        dataset, r_id, final_regions_as_labels, slice_thickness,
+                        W_global=W_global, H_global=H_global, mappings=mappings
                     )
                     oi = set_image_properties(rlImage, transpose_xy=True)
                     mask_path = f"{str(filename_without_extension / r_name)}.mask.nrrd"
                     sitk.WriteImage(oi, mask_path)
                     print(f"Exported region mask: {mask_path}")
 
-                # Export raw data normalization maps as NRRD
-                # TIC, RMS, etc.
-                # norm_maps = ScilsLabFileHelper.compute_normalization_maps(dataset, r_name, r_id)
-                # for norm_name, norm_image in norm_maps.items():
-                #     normalized_name = ScilsLabFileHelper.normalize(norm_name)
-                #     oi = set_image_properties(norm_image)
-                #     norm_path = f"{str(filename_without_extension / r_name)}.{normalized_name}.nrrd"
-                #     sitk.WriteImage(oi, norm_path)
-                #     print(f"Exported normalization map: {norm_path}")
-
-
                 # Export spot images (normalizations, etc.)
                 if final_spot_images:
                     print("Processing spot images...")
                     sImages = slxFileHelper.load_spot_images(
-                        dataset, r_name, r_id, final_spot_images, slice_thickness
+                        dataset, r_name, r_id, final_spot_images, slice_thickness,
+                        W_global=W_global, H_global=H_global, mappings=mappings
                     )
                     for name, image in sImages:
                         normalized_name = slxFileHelper.normalize(name)
@@ -193,7 +184,7 @@ def main():
                     # Profile mode: export full spectral data
                     print("Using profile mode (full spectra)")
                     xs, data = slxFileHelper.load_region_data_as_continuous_profile(
-                        dataset, r_name, r_id
+                        dataset, r_name, r_id, W_global, H_global, mappings
                     )
                     uuid, sha1_hash, spectra_offsets = writer.ibd_write_continuous_spectra(data, xs)
                     writer.set_imzML_export_info(uuid, sha1_hash, "continuous", "profile spectrum")
@@ -201,7 +192,7 @@ def main():
                     # Centroid mode: export specified features only
                     print(f"Using centroid mode ({final_features.shape[0]} features)")
                     data = slxFileHelper.load_region_data_as_continuous_centroids(
-                        dataset, r_name, r_id, final_features
+                        dataset, r_name, r_id, final_features, W_global, H_global, mappings
                     )
                     uuid, sha1_hash, spectra_offsets = writer.ibd_write_continuous_spectra(data, final_features[:, 3])
                     writer.set_imzML_export_info(uuid, sha1_hash, "continuous", "centroid spectrum")
