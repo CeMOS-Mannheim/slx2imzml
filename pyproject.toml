@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slx2imzml"
+version = "0.6.0"
+description = "Convert SCiLS Lab (.slx) files to open-standard imzML files (compatible with M²aia)."
+readme = "README.md"
+requires-python = ">=3.6"
+authors = [
+    { name = "Jonas Cordes", email = "j.cordes@th-mannheim.de" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "numpy",
+    "pandas",
+    "jinja2",
+    "matplotlib",
+    "SimpleITK",
+    "Pillow",
+    "shiny",
+    "faicons",
+    "plotly",
+    "shinywidgets",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/CeMOS-Mannheim/slx2imzml"
+
+[project.scripts]
+slx2imzml-gui = "slx2imzml_gui.launcher:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+slx2imzml = ["imzMLTemplate.j2"]

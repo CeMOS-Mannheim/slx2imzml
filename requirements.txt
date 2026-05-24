@@ -1,4 +1,4 @@
-# Core dependencies for imzmlio package
+# Core dependencies
 numpy
 pandas
 jinja2
@@ -6,10 +6,10 @@ matplotlib
 SimpleITK
 Pillow
 
-#scilslab (follow vendor instructions)
-
 # GUI dependencies
 shiny
 faicons
 plotly
 shinywidgets
+
+# scilslab is vendor-provided (install separately)

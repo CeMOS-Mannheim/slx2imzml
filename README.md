@@ -131,6 +131,28 @@ slx2imzml/
 
 This project is developed at Hochschule Mannheim in connection with the M²aia project for open-source mass spectrometry imaging analysis.
 
+## Testing
+
+The repository includes a `pytest` test setup with unit tests for core conversion helpers and writer behavior.
+
+### Run tests locally
+
+```bash
+pip install -e .[test]
+pytest
+```
+
+If you prefer a requirements file, use:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+### Continuous Integration
+
+Automated tests run on GitHub Actions for Linux and Windows across Python 3.10–3.12.
+
 ## License
 
 MIT License - See LICENSE file for details.
