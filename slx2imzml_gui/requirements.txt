@@ -1,6 +1,7 @@
 shiny
 faicons
-pandas
+plotly
+shinywidgets
+requests
 numpy
-SimpleITK
-scilslab
+pandas
