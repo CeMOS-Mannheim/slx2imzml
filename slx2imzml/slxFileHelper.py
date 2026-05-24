@@ -132,6 +132,96 @@ class slxFileHelper:
         for c in replace_chars:
             filename = filename.replace(c, replace_with)
         return filename
+
+    @staticmethod
+    def _to_float_or_nan(value) -> float:
+        """Convert a value to float, returning NaN on failure."""
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return np.nan
+
+    @staticmethod
+    def _is_ccs_feature_row(feature_row: np.ndarray) -> bool:
+        """Check if a feature row contains finite CCS bounds.
+
+        Expected row layout:
+            [id, mz_low, mz_high, centroid, ccs_low, ccs_high]
+        """
+        if len(feature_row) < 6:
+            return False
+        ccs_low = slxFileHelper._to_float_or_nan(feature_row[4])
+        ccs_high = slxFileHelper._to_float_or_nan(feature_row[5])
+        return np.isfinite(ccs_low) and np.isfinite(ccs_high)
+
+    @staticmethod
+    def _build_final_features(features_df: pd.DataFrame, mz_offset_step: float = 1e-4) -> np.ndarray:
+        """Build final feature matrix and shift duplicate centroids for CCS features.
+
+        Returns an array with columns:
+            [id, mz_low, mz_high, centroid_shifted, ccs_low, ccs_high]
+
+        Duplicate centroid m/z values are shifted by `mz_offset_step` to keep separate
+        feature channels distinguishable in downstream tools at tolerance 0. For groups
+        with identical centroid m/z values, rows are ordered by CCS center so that higher
+        CCS receives the larger m/z shift.
+        """
+        if features_df is None or features_df.empty:
+            return np.empty((0, 6), dtype=np.float64)
+
+        work = features_df.copy()
+
+        required_cols = ["id", "mz_low", "mz_high"]
+        missing = [c for c in required_cols if c not in work.columns]
+        if missing:
+            raise ValueError(f"Missing required feature columns: {missing}")
+
+        if "ccs_low" not in work.columns:
+            work["ccs_low"] = np.nan
+        if "ccs_high" not in work.columns:
+            work["ccs_high"] = np.nan
+
+        work["id"] = pd.to_numeric(work["id"], errors="coerce")
+        work["mz_low"] = pd.to_numeric(work["mz_low"], errors="coerce")
+        work["mz_high"] = pd.to_numeric(work["mz_high"], errors="coerce")
+        work["ccs_low"] = pd.to_numeric(work["ccs_low"], errors="coerce")
+        work["ccs_high"] = pd.to_numeric(work["ccs_high"], errors="coerce")
+
+        work = work.dropna(subset=["id", "mz_low", "mz_high"]).copy()
+        if work.empty:
+            return np.empty((0, 6), dtype=np.float64)
+
+        work["centroid"] = (work["mz_low"] + work["mz_high"]) / 2.0
+        work["ccs_center"] = (work["ccs_low"] + work["ccs_high"]) / 2.0
+
+        # Stable base order by centroid and id for deterministic exports.
+        work = work.sort_values(["centroid", "id"], kind="mergesort")
+
+        shifted_centroids = np.empty(len(work), dtype=np.float64)
+        grouped = work.groupby("centroid", sort=False, dropna=False)
+
+        for _, grp in grouped:
+            if len(grp) == 1:
+                shifted_centroids[grp.index.to_numpy()] = grp["centroid"].to_numpy()
+                continue
+
+            # Within duplicate-centroid groups, sort by CCS center ascending so the
+            # highest CCS gets the largest positive m/z offset.
+            g = grp.copy()
+            g["_ccs_sort"] = g["ccs_center"].fillna(-np.inf)
+            g = g.sort_values(["_ccs_sort", "id"], kind="mergesort")
+
+            base = float(g["centroid"].iloc[0])
+            ranks = np.arange(len(g), dtype=np.float64)
+            shifted = base + ranks * float(mz_offset_step)
+            shifted_centroids[g.index.to_numpy()] = shifted
+
+        work["centroid_shifted"] = shifted_centroids[work.index.to_numpy()]
+
+        # Final deterministic order by shifted centroid.
+        work = work.sort_values(["centroid_shifted", "id"], kind="mergesort")
+
+        return work[["id", "mz_low", "mz_high", "centroid_shifted", "ccs_low", "ccs_high"]].to_numpy(dtype=np.float64)
     
 
     @staticmethod
@@ -190,7 +280,8 @@ class slxFileHelper:
             dataset: SCiLS Lab dataset proxy
             r_name: Name of the region to process
             r_id: ID of the region to process
-            features: Array of features with columns [id, mz_low, mz_high, centroid]
+            features: Array of features with columns
+                [id, mz_low, mz_high, centroid, ccs_low, ccs_high]
             W_global: Global grid width
             H_global: Global grid height
             mappings: List of subregion mappings (offsets and shapes)
@@ -205,8 +296,41 @@ class slxFileHelper:
         
         # x,y,z + s
         data = np.full((H_global, W_global, 1, features.shape[0]), np.nan)
+
+        index_images = dataset.get_index_images(r_id)
+        if len(index_images) != len(mappings):
+            raise ValueError(
+                f"Unexpected number of index images found: expected {len(mappings)}, got {len(index_images)}"
+            )
         
-        for f_index, (_, f_mz_low, f_mz_high, _) in enumerate(features):
+        for f_index, feature_row in enumerate(features):
+            f_id = int(feature_row[0])
+            f_mz_low = float(feature_row[1])
+            f_mz_high = float(feature_row[2])
+
+            # CCS feature path: use per-feature intensities to keep CCS channels separate
+            # even if m/z interval is identical.
+            if slxFileHelper._is_ccs_feature_row(feature_row):
+                ion = dataset.feature_table.get_feature_intensities(f_id, region_id=r_id, mode="area")
+                values_by_spot = {int(sid): float(val) for sid, val in zip(ion.spot_ids, ion.values)}
+
+                for mapping in mappings:
+                    idx = mapping["index"]
+                    offset_x = mapping["offset_x"]
+                    offset_y = mapping["offset_y"]
+                    idx_image = index_images[idx]
+                    H_sub, W_sub = mapping["shape"]
+
+                    local = np.full((H_sub, W_sub), np.nan, dtype=np.float64)
+                    mask = idx_image.values >= 0
+                    if np.any(mask):
+                        spot_ids = idx_image.values[mask].astype(np.int64)
+                        local[mask] = [values_by_spot.get(int(sid), np.nan) for sid in spot_ids]
+
+                    data[offset_y:offset_y+H_sub, offset_x:offset_x+W_sub, 0, f_index] = local
+                continue
+
+            # Plain m/z feature path.
             ionimage_list = dataset.get_ion_images(f_mz_low, f_mz_high, r_id)
             if len(ionimage_list) == len(mappings):
                 for mapping in mappings:
@@ -215,7 +339,7 @@ class slxFileHelper:
                     offset_y = mapping["offset_y"]
                     img = ionimage_list[idx]
                     H_sub, W_sub = mapping["shape"]
-                    
+
                     data[offset_y:offset_y+H_sub, offset_x:offset_x+W_sub, 0, f_index] = img.values
             else:
                 raise ValueError(
@@ -703,24 +827,23 @@ class slxFileHelper:
 
                 # Process features: combine all feature lists and sort by m/z
                 features = None
+                mz_offset_step = float(slx_context.get("ccs_mz_offset", 1e-4))
                 for f_id, f_count, f_listname in self.feature_lists:
-                    feature_data = dataset.feature_table.get_features(f_id)[['id', 'mz_low', 'mz_high']]
+                    feature_table = dataset.feature_table.get_features(f_id, mode="area")
+                    selected_cols = ["id", "mz_low", "mz_high"]
+                    if "ccs_low" in feature_table.columns:
+                        selected_cols.append("ccs_low")
+                    if "ccs_high" in feature_table.columns:
+                        selected_cols.append("ccs_high")
+                    feature_data = feature_table[selected_cols]
                     if features is None:
                         features = feature_data
                     else:
-                        features = np.concatenate((features, feature_data))
+                        features = pd.concat([features, feature_data], ignore_index=True)
                 
                 if features is not None:
-                    features = np.array(features)
-                    # Calculate centroids as mean of mz_low and mz_high
-                    centroids = np.mean(features[..., 1:3], axis=1)
-                    # Sort features by centroid m/z value
-                    sorted_indices = np.argsort(centroids)
-                    # Combine features with centroids for final export
-                    slx_context["final_features"] = np.concatenate([
-                        features[sorted_indices], 
-                        centroids[sorted_indices][..., np.newaxis]
-                    ], axis=1).tolist()
+                    final_features = slxFileHelper._build_final_features(features, mz_offset_step=mz_offset_step)
+                    slx_context["final_features"] = final_features.tolist()
                 else:
                     slx_context["final_features"] = []
 
