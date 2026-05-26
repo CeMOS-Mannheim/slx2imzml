@@ -1,1 +1,1 @@
-"""Python Shiny GUI for slx2imzml."""
+# slx2imzml_gui package

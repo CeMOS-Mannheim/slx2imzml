@@ -105,7 +105,20 @@ def main():
                     print(f"Exported optical image: {optical_path}")
 
             # Process each region specified in the configuration
-            for r_name, r_id in final_regions:
+            for region_entry in final_regions:
+                if isinstance(region_entry, dict):
+                    r_name = region_entry["name"]
+                    r_id = region_entry["id"]
+                    valid_region_ids = list(region_entry.get("valid_region_ids", [r_id]))
+                    segmentation_regions = region_entry.get("segmentation_regions", [])
+                    selection_type = region_entry.get("selection_type", "leaf")
+                else:
+                    # Backward compatibility with legacy [name, id] entries.
+                    r_name, r_id = region_entry
+                    valid_region_ids = [r_id]
+                    segmentation_regions = []
+                    selection_type = "legacy"
+
                 print(f"## Processing region: {r_name}")
 
                 # Create output directory structure
@@ -120,6 +133,8 @@ def main():
                 print(f"Origin: {origin}")
                 print(f"Direction matrix: {direction}")
                 print(f"Global dimensions: {W_global}x{H_global}")
+
+                valid_spot_ids = slxFileHelper._union_spot_ids_for_regions(dataset, valid_region_ids)
 
                 def set_image_properties(image: sitk.Image, transpose_xy: bool = False) -> sitk.Image:
                     """
@@ -149,7 +164,22 @@ def main():
                     return image
                 
                 # Export region masks as multi-label NRRD image
-                if final_regions_as_labels:
+                if selection_type in ("folder", "folder_cluster"):
+                    rlImage = slxFileHelper.load_region_mask_with_segmentations(
+                        dataset,
+                        r_id,
+                        valid_region_ids,
+                        segmentation_regions,
+                        slice_thickness,
+                        W_global=W_global,
+                        H_global=H_global,
+                        mappings=mappings,
+                    )
+                    oi = set_image_properties(rlImage, transpose_xy=True)
+                    mask_path = f"{str(filename_without_extension / r_name)}.mask.nrrd"
+                    sitk.WriteImage(oi, mask_path)
+                    print(f"Exported region mask: {mask_path}")
+                elif final_regions_as_labels:
                     rlImage = slxFileHelper.load_regions_as_labels(
                         dataset, r_id, final_regions_as_labels, slice_thickness,
                         W_global=W_global, H_global=H_global, mappings=mappings
@@ -164,7 +194,8 @@ def main():
                     print("Processing spot images...")
                     sImages = slxFileHelper.load_spot_images(
                         dataset, r_name, r_id, final_spot_images, slice_thickness,
-                        W_global=W_global, H_global=H_global, mappings=mappings
+                        W_global=W_global, H_global=H_global, mappings=mappings,
+                        valid_spot_ids=valid_spot_ids
                     )
                     for name, image in sImages:
                         normalized_name = slxFileHelper.normalize(name)
@@ -184,7 +215,8 @@ def main():
                     # Profile mode: export full spectral data
                     print("Using profile mode (full spectra)")
                     xs, data = slxFileHelper.load_region_data_as_continuous_profile(
-                        dataset, r_name, r_id, W_global, H_global, mappings
+                        dataset, r_name, r_id, W_global, H_global, mappings,
+                        valid_spot_ids=valid_spot_ids
                     )
                     uuid, sha1_hash, spectra_offsets = writer.ibd_write_continuous_spectra(data, xs)
                     writer.set_imzML_export_info(uuid, sha1_hash, "continuous", "profile spectrum")
@@ -192,7 +224,8 @@ def main():
                     # Centroid mode: export specified features only
                     print(f"Using centroid mode ({final_features.shape[0]} features)")
                     data = slxFileHelper.load_region_data_as_continuous_centroids(
-                        dataset, r_name, r_id, final_features, W_global, H_global, mappings
+                        dataset, r_name, r_id, final_features, W_global, H_global, mappings,
+                        valid_spot_ids=valid_spot_ids
                     )
                     uuid, sha1_hash, spectra_offsets = writer.ibd_write_continuous_spectra(data, final_features[:, 3])
                     writer.set_imzML_export_info(uuid, sha1_hash, "continuous", "centroid spectrum")

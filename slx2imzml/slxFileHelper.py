@@ -23,6 +23,7 @@ import re
 from collections import Counter
 from PIL import Image
 import io
+from typing import Any
 
 
 class slxFileHelper:
@@ -86,6 +87,7 @@ class slxFileHelper:
         print(f"Optical Images: {slx_context.get('optical_images', 'N/A')}")
         print(f"Regions: {slx_context.get('regions', 'N/A')}")
         print(f"Feature Lists: {slx_context.get('featurelists', 'N/A')}")
+        print(f"Include CCS: {slx_context.get('include_ccs', True)}")
         print(f"Labels: {slx_context.get('labels', 'N/A')}")
 
     def get_dataset_proxy(self, slx_file) -> sl.DatasetProxy:
@@ -268,7 +270,7 @@ class slxFileHelper:
     @staticmethod
     def load_region_data_as_continuous_centroids(
         dataset: sl.DatasetProxy, r_name: str, r_id: int, features: np.ndarray,
-        W_global: int, H_global: int, mappings: list
+        W_global: int, H_global: int, mappings: list, valid_spot_ids: set[int] | None = None
     ) -> np.ndarray:
         """
         Load region spectral data as continuous centroid format.
@@ -302,6 +304,10 @@ class slxFileHelper:
             raise ValueError(
                 f"Unexpected number of index images found: expected {len(mappings)}, got {len(index_images)}"
             )
+
+        valid_spot_ids_array = None
+        if valid_spot_ids is not None:
+            valid_spot_ids_array = np.array(sorted(int(v) for v in valid_spot_ids), dtype=np.int64)
         
         for f_index, feature_row in enumerate(features):
             f_id = int(feature_row[0])
@@ -323,6 +329,8 @@ class slxFileHelper:
 
                     local = np.full((H_sub, W_sub), np.nan, dtype=np.float64)
                     mask = idx_image.values >= 0
+                    if valid_spot_ids_array is not None:
+                        mask = mask & np.isin(idx_image.values, valid_spot_ids_array)
                     if np.any(mask):
                         spot_ids = idx_image.values[mask].astype(np.int64)
                         local[mask] = [values_by_spot.get(int(sid), np.nan) for sid in spot_ids]
@@ -340,7 +348,13 @@ class slxFileHelper:
                     img = ionimage_list[idx]
                     H_sub, W_sub = mapping["shape"]
 
-                    data[offset_y:offset_y+H_sub, offset_x:offset_x+W_sub, 0, f_index] = img.values
+                    local = np.full((H_sub, W_sub), np.nan, dtype=np.float64)
+                    mask = index_images[idx].values >= 0
+                    if valid_spot_ids_array is not None:
+                        mask = mask & np.isin(index_images[idx].values, valid_spot_ids_array)
+                    local[mask] = img.values[mask]
+
+                    data[offset_y:offset_y+H_sub, offset_x:offset_x+W_sub, 0, f_index] = local
             else:
                 raise ValueError(
                     f"Unexpected number of ion images found: expected {len(mappings)}, got {len(ionimage_list)}"
@@ -350,7 +364,7 @@ class slxFileHelper:
     @staticmethod
     def load_region_data_as_continuous_profile(
         dataset: sl.DatasetProxy, r_name: str, r_id: int,
-        W_global: int, H_global: int, mappings: list
+        W_global: int, H_global: int, mappings: list, valid_spot_ids: set[int] | None = None
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Load region spectral data as continuous profile format.
@@ -376,10 +390,13 @@ class slxFileHelper:
         
         index_images = dataset.get_index_images(r_id)
         all_unique_spot_ids = []
+        valid_spot_ids_set = None if valid_spot_ids is None else {int(v) for v in valid_spot_ids}
         for img in index_images:
             un = sorted(np.unique(img.values))
             if un and un[0] == -1:
                 un.pop(0)
+            if valid_spot_ids_set is not None:
+                un = [sid for sid in un if int(sid) in valid_spot_ids_set]
             all_unique_spot_ids.extend(un)
             
         all_unique_spot_ids = sorted(list(set(all_unique_spot_ids)))
@@ -402,6 +419,8 @@ class slxFileHelper:
             img = index_images[idx]
             
             mask = img.values >= 0
+            if valid_spot_ids_set is not None:
+                mask = mask & np.isin(img.values, np.array(sorted(valid_spot_ids_set), dtype=np.int64))
             rows, cols = np.where(mask)
             spot_ids = img.values[mask]
             
@@ -519,7 +538,8 @@ class slxFileHelper:
     @staticmethod
     def load_spot_images(
         dataset: sl.DatasetProxy, r_name: str, r_id: int, spot_images: list, slice_thickness: float,
-        W_global: int = None, H_global: int = None, mappings: list = None
+        W_global: int = None, H_global: int = None, mappings: list = None,
+        valid_spot_ids: set[int] | None = None
     ) -> list:
         """
         Load spot images (normalizations, etc.) for a specific region.
@@ -544,6 +564,9 @@ class slxFileHelper:
             _, _, _, W_global, H_global, mappings = slxFileHelper.get_combined_geometry(dataset, r_id, slice_thickness)
             
         index_images = dataset.get_index_images(r_id)
+        valid_spot_ids_array = None
+        if valid_spot_ids is not None:
+            valid_spot_ids_array = np.array(sorted(int(v) for v in valid_spot_ids), dtype=np.int64)
         
         spot_image_list = []
         for s_name, s_id in spot_images:
@@ -560,6 +583,8 @@ class slxFileHelper:
                 img = index_images[idx]
                 
                 mask_foreground = img.values >= 0
+                if valid_spot_ids_array is not None:
+                    mask_foreground = mask_foreground & np.isin(img.values, valid_spot_ids_array)
                 mask_indices = img.values[mask_foreground].astype(np.int32)
                 
                 rows, cols = np.where(mask_foreground)
@@ -580,6 +605,184 @@ class slxFileHelper:
             spot_image_list.append([s_name, sitk_image])
         
         return spot_image_list
+
+    @staticmethod
+    def _extract_region_spot_ids(dataset: sl.DatasetProxy, region_id: Any) -> set[int]:
+        """Return spot IDs for a region, best-effort with empty fallback."""
+        try:
+            spots = dataset.get_region_spots(region_id)
+            if isinstance(spots, dict) and "spot_id" in spots:
+                return {int(sid) for sid in spots["spot_id"]}
+        except Exception:
+            pass
+        return set()
+
+    @staticmethod
+    def _collect_leaf_regions(region: sl.RegionTree) -> list[sl.RegionTree]:
+        """Collect all leaf regions under a region (including itself if leaf)."""
+        if not getattr(region, "subregions", None):
+            return [region]
+
+        leaves = []
+        for sub in region.subregions:
+            leaves.extend(slxFileHelper._collect_leaf_regions(sub))
+        return leaves
+
+    @staticmethod
+    def _build_region_export_tasks(dataset: sl.DatasetProxy, region_tree: sl.RegionTree, query_regions: list | None) -> list[dict[str, Any]]:
+        """Resolve selected regions into export tasks.
+
+        Task types:
+        - `leaf`: selected region is a leaf — exported directly.
+        - `folder`: selected region is a folder — one task, folder spotlist = valid=1,
+                    all descendant leaves become segmentation labels (2, 3, …).
+        """
+        all_regions = region_tree.get_all_regions()
+
+        if query_regions is None or len(query_regions) == 0:
+            selected_regions = [r for r in all_regions if len(getattr(r, "subregions", [])) == 0]
+        else:
+            selected_regions = []
+            seen_ids: set[str] = set()
+
+            for query in query_regions:
+                exact = [r for r in all_regions if r.name == query]
+                if exact:
+                    for r in exact:
+                        rid = str(r.id)
+                        if rid not in seen_ids:
+                            selected_regions.append(r)
+                            seen_ids.add(rid)
+                    continue
+
+                # Backward-compatible regex fallback.
+                try:
+                    regex = re.compile(query)
+                except re.error:
+                    continue
+
+                for r in all_regions:
+                    if regex.search(r.name):
+                        rid = str(r.id)
+                        if rid not in seen_ids:
+                            selected_regions.append(r)
+                            seen_ids.add(rid)
+
+        tasks: list[dict[str, Any]] = []
+        used_names: Counter = Counter()
+
+        for selected in selected_regions:
+            selected_id = selected.id
+            selected_name = selected.name
+            subregions = getattr(selected, "subregions", [])
+
+            if not subregions:
+                task_name = selected_name
+                used_names[task_name] += 1
+                if used_names[task_name] > 1:
+                    task_name = f"{task_name}__{used_names[task_name]:02d}"
+
+                tasks.append({
+                    "name": task_name,
+                    "id": selected_id,
+                    "selection_type": "leaf",
+                    "selected_region_name": selected_name,
+                    "selected_region_id": selected_id,
+                    "valid_region_ids": [selected_id],
+                    "segmentation_regions": [],
+                })
+                continue
+
+            descendant_leaves = slxFileHelper._collect_leaf_regions(selected)
+            descendant_leaves = [r for r in descendant_leaves if str(r.id) != str(selected_id)]
+            seg_regions = sorted([[r.name, r.id] for r in descendant_leaves], key=lambda x: x[0])
+
+            task_name = selected_name
+            used_names[task_name] += 1
+            if used_names[task_name] > 1:
+                task_name = f"{task_name}__{used_names[task_name]:02d}"
+
+            tasks.append({
+                "name": task_name,
+                "id": selected_id,
+                "selection_type": "folder",
+                "selected_region_name": selected_name,
+                "selected_region_id": selected_id,
+                # valid=1 = folder's own spotlist; leaves become labels 2, 3, …
+                "valid_region_ids": [selected_id],
+                "segmentation_regions": seg_regions,
+            })
+
+        return tasks
+
+    @staticmethod
+    def _union_spot_ids_for_regions(dataset: sl.DatasetProxy, region_ids: list[Any] | None) -> set[int]:
+        """Return union of spot IDs for all region IDs."""
+        if region_ids is None:
+            return set()
+        union_ids: set[int] = set()
+        for rid in region_ids:
+            union_ids.update(slxFileHelper._extract_region_spot_ids(dataset, rid))
+        return union_ids
+
+    @staticmethod
+    def load_region_mask_with_segmentations(
+        dataset: sl.DatasetProxy,
+        r_id: Any,
+        valid_region_ids: list[Any],
+        segmentation_regions: list[list],
+        slice_thickness: float,
+        W_global: int = None,
+        H_global: int = None,
+        mappings: list = None,
+    ) -> sitk.Image:
+        """Create mask for a selected export region with segmentation overlays.
+
+        Label semantics:
+        - 0: background
+        - 1: valid spectra (union of `valid_region_ids`)
+        - 2..N: child/segmentation regions in `segmentation_regions`
+                (in provided order, overriding label 1)
+        """
+        if W_global is None or H_global is None or mappings is None:
+            _, _, _, W_global, H_global, mappings = slxFileHelper.get_combined_geometry(dataset, r_id, slice_thickness)
+
+        index_images = dataset.get_index_images(r_id)
+        labeled_array = np.zeros((H_global, W_global), dtype=np.ushort)
+
+        valid_spot_ids = slxFileHelper._union_spot_ids_for_regions(dataset, valid_region_ids)
+        valid_array = np.array(sorted(valid_spot_ids), dtype=np.int64) if valid_spot_ids else np.array([], dtype=np.int64)
+
+        if valid_array.size > 0:
+            for mapping in mappings:
+                idx = mapping["index"]
+                offset_x = mapping["offset_x"]
+                offset_y = mapping["offset_y"]
+                img = index_images[idx]
+                H_sub, W_sub = mapping["shape"]
+                mask_valid = np.isin(img.values, valid_array)
+                labeled_array[offset_y:offset_y+H_sub, offset_x:offset_x+W_sub][mask_valid] = 1
+
+        label_value = 2
+        for _, seg_id in segmentation_regions:
+            seg_spots = slxFileHelper._extract_region_spot_ids(dataset, seg_id)
+            if valid_spot_ids:
+                seg_spots = seg_spots.intersection(valid_spot_ids)
+            seg_array = np.array(sorted(seg_spots), dtype=np.int64) if seg_spots else np.array([], dtype=np.int64)
+
+            if seg_array.size > 0:
+                for mapping in mappings:
+                    idx = mapping["index"]
+                    offset_x = mapping["offset_x"]
+                    offset_y = mapping["offset_y"]
+                    img = index_images[idx]
+                    H_sub, W_sub = mapping["shape"]
+                    mask_seg = np.isin(img.values, seg_array)
+                    labeled_array[offset_y:offset_y+H_sub, offset_x:offset_x+W_sub][mask_seg] = label_value
+            label_value += 1
+
+        sitk_image = sitk.GetImageFromArray(labeled_array[..., np.newaxis].T)
+        return sitk_image
     
     @staticmethod
     def load_optical_image(dataset: sl.DatasetProxy, optical_images: list, slice_thickness: float) -> list:
@@ -803,14 +1006,12 @@ class slxFileHelper:
                 slx_context["final_optical_images"] = [S for S in optical_images]                
                 
                 
-                # Process regions matching the query criteria
-                match_regions_by_name = slxFileHelper._match_regions_by_name
+                # Process regions into export tasks (leafs and folder-clusters)
                 all_regions = region_tree.get_all_regions()
-
-                slx_context["final_regions"] = [
-                    [region.name, region.id] for region in all_regions 
-                    if match_regions_by_name(region, slx_context["regions"])
-                ]
+                match_regions_by_name = slxFileHelper._match_regions_by_name
+                slx_context["final_regions"] = slxFileHelper._build_region_export_tasks(
+                    dataset, region_tree, slx_context["regions"]
+                )
                
                 slx_context["final_regions_as_labels"] = [
                     [region.name, region.id] for region in all_regions 
@@ -828,12 +1029,13 @@ class slxFileHelper:
                 # Process features: combine all feature lists and sort by m/z
                 features = None
                 mz_offset_step = float(slx_context.get("ccs_mz_offset", 1e-4))
+                include_ccs = bool(slx_context.get("include_ccs", True))
                 for f_id, f_count, f_listname in self.feature_lists:
                     feature_table = dataset.feature_table.get_features(f_id, mode="area")
                     selected_cols = ["id", "mz_low", "mz_high"]
-                    if "ccs_low" in feature_table.columns:
+                    if include_ccs and "ccs_low" in feature_table.columns:
                         selected_cols.append("ccs_low")
-                    if "ccs_high" in feature_table.columns:
+                    if include_ccs and "ccs_high" in feature_table.columns:
                         selected_cols.append("ccs_high")
                     feature_data = feature_table[selected_cols]
                     if features is None:

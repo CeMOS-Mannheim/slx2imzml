@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SCiLS Exporter</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <!-- Plotly (slim build) -->
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.33.0/plotly.min.js"></script>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════ SIDEBAR -->
+<aside class="sidebar" id="sidebar">
+
+  <div class="sidebar-brand">
+    <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18"/>
+    </svg>
+    <span>SCiLS Exporter</span>
+  </div>
+
+  <!-- File card -->
+  <div class="card">
+    <div class="card-header">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+      Input File
+    </div>
+    <div class="card-body">
+      <button class="btn btn-outline" id="btnBrowse">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+        Browse…
+      </button>
+      <p class="file-path" id="filePath">No file selected</p>
+    </div>
+  </div>
+
+  <!-- Export card -->
+  <div class="card">
+    <div class="card-header">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Export
+    </div>
+    <div class="card-body">
+      <button class="btn btn-primary" id="btnProcess" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Start Export
+      </button>
+      <div class="selection-status" id="selectionStatus">
+        <div class="status-row"><span class="status-label">Regions:</span> <span id="statusRegions" class="status-value muted">None</span></div>
+        <div class="status-row"><span class="status-label">Features:</span> <span id="statusFeatures" class="status-value muted">None</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Advanced options -->
+  <div class="card">
+    <div class="card-header">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 010 14.14M4.93 4.93a10 10 0 000 14.14"/></svg>
+      Advanced Options
+    </div>
+    <div class="card-body">
+      <label class="field-label" for="sliceThickness">Slice Thickness (µm)</label>
+      <input class="field-input" type="number" id="sliceThickness" value="10" min="1" />
+      <label class="toggle-wrap" for="includeCCS">
+        <input type="checkbox" id="includeCCS" checked />
+        <span class="toggle-slider"></span>
+        <span class="toggle-label">Include CCS Values</span>
+      </label>
+    </div>
+  </div>
+
+  <!-- Normalizations -->
+  <div class="card card-grow">
+    <div class="card-header">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      Normalizations
+    </div>
+    <div class="card-body card-body-scroll">
+      <table class="data-table" id="normTable">
+        <thead><tr><th>Name</th></tr></thead>
+        <tbody id="normBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</aside>
+
+<!-- ═══════════════════════════════════════════════════════════════ MAIN -->
+<main class="main" id="main">
+
+  <div class="col-pair">
+
+    <!-- ── Left column: Region tree + plot ── -->
+    <div class="col-half">
+
+      <div class="panel panel-grow-small">
+        <div class="panel-header">
+          <span class="panel-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h6v6H3zM15 3h6v6h-6zM15 15h6v6h-6zM3 15h6v6H3z"/><line x1="9" y1="6" x2="15" y2="6"/><line x1="12" y1="9" x2="12" y2="15"/><line x1="9" y1="18" x2="15" y2="18"/></svg>
+            Region Tree
+          </span>
+          <div class="btn-group">
+            <button class="btn btn-xs btn-ghost" id="btnRegionsAll">Select All</button>
+            <button class="btn btn-xs btn-ghost" id="btnRegionsNone">Clear</button>
+          </div>
+        </div>
+        <div class="panel-body">
+          <table class="data-table selectable" id="regionTable">
+            <thead>
+              <tr>
+                <th class="col-color"></th>
+                <th>Name</th>
+                <th class="col-num">nPx</th>
+              </tr>
+            </thead>
+            <tbody id="regionBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel panel-grow-large">
+        <div class="panel-header">
+          <span class="panel-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+            Region Map
+          </span>
+        </div>
+        <div class="panel-body panel-body-fill" id="regionPlot"></div>
+      </div>
+
+    </div><!-- /col-half -->
+
+    <!-- ── Right column: Features + details ── -->
+    <div class="col-half">
+
+      <div class="panel panel-grow-small">
+        <div class="panel-header">
+          <span class="panel-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            Feature Lists
+          </span>
+          <div class="btn-group">
+            <button class="btn btn-xs btn-ghost" id="btnFeaturesAll">Select All</button>
+            <button class="btn btn-xs btn-ghost" id="btnFeaturesNone">Clear</button>
+          </div>
+        </div>
+        <div class="panel-body">
+          <table class="data-table selectable" id="featureTable">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th class="col-num">nFeat</th>
+                <th class="col-num">mzFeat</th>
+              </tr>
+            </thead>
+            <tbody id="featureBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel panel-grow-large">
+        <div class="panel-header">
+          <span class="panel-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            Feature Details
+          </span>
+        </div>
+        <div class="panel-body">
+          <table class="data-table" id="featureDetailsTable">
+            <thead id="featureDetailsHead"><tr><td class="muted" colspan="99">Select a feature list to see details.</td></tr></thead>
+            <tbody id="featureDetailsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- /col-half -->
+
+  </div><!-- /col-pair -->
+
+</main>
+
+<!-- ═══════════════════════════════════════════════════════════════ TOAST -->
+<div id="toastContainer"></div>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

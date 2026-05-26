@@ -1,695 +1,458 @@
-import os
-import json
-import pathlib
-import datetime
-import tkinter as tk
-from tkinter import filedialog
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import plotly.graph_objects as go
-from shiny import App, Inputs, Outputs, Session, render, ui, reactive
-from shinywidgets import output_widget, render_widget
-import faicons as fa
-import scilslab as sl
-from PIL import Image
-import io
-import base64
+"""
+SCiLS Exporter — Flask/HTML5 GUI
+"""
+from __future__ import annotations
 
-import sys
+import base64
+import datetime
+import io
+import json
+import math
+import os
+import pathlib
+import socket
 import subprocess
+import sys
 import importlib.util
 
-# Add the parent directory to sys.path to import local modules
-root_dir = pathlib.Path(__file__).parent.parent
-sys.path.append(str(root_dir))
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+from flask import Flask, jsonify, render_template, request, Response
+from PIL import Image
 
-def ensure_package_installed():
-    """Ensure the slx2imzml package is installed in editable mode."""
+# ---------------------------------------------------------------------------
+# Bootstrap: ensure slx2imzml is importable
+# ---------------------------------------------------------------------------
+ROOT_DIR = pathlib.Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT_DIR))
+
+
+def _ensure_package() -> None:
     if importlib.util.find_spec("slx2imzml") is None:
-        print("slx2imzml package not found in current environment.")
-        print(f"Installing in editable mode from: {root_dir}")
-        try:
-            # Use sys.executable to ensure we use the Correct pip (from the .venv)
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "-e", str(root_dir)])
-            print("Successfully installed slx2imzml.")
-        except Exception as e:
-            print(f"FAILED to install slx2imzml automatically: {e}")
-            print("Please run 'pip install -e .' manually in the project root.")
+        print(f"[bootstrap] Installing slx2imzml from {ROOT_DIR} …")
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "-e", str(ROOT_DIR)],
+            stdout=subprocess.DEVNULL,
+        )
 
-# Run check at startup
-ensure_package_installed()
 
-from slx2imzml.slxFileHelper import slxFileHelper
+_ensure_package()
 
-# --- Helpers ---
-def select_file():
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes('-topmost', True)
-    file_path = filedialog.askopenfilename(filetypes=[("SCiLS Lab files", "*.slx")])
-    root.destroy()
-    return file_path
+import scilslab as sl  # noqa: E402  (must come after bootstrap)
 
-# Selection retrieval is now handled via the renderer's .cell_selection() method.
+# ---------------------------------------------------------------------------
+# App
+# ---------------------------------------------------------------------------
+app = Flask(__name__)
 
-def process_optical_image(dataset):
-    """Extracts and processes the optical image from the SCiLS dataset for display."""
+# Single-user in-process state (local tool — no auth needed)
+STATE: dict = {
+    "slx_path": None,
+    "regions": [],          # list[dict]  — full region metadata
+    "feature_lists": [],    # list[dict]
+    "normalizations": [],   # list[dict]
+    "features_cache": {},   # list_id -> list[dict]
+    "plot_traces": [],      # list[dict]  — Plotly trace data
+    "plot_image": None,     # dict | None — Plotly layout image
+}
+
+
+def _json_safe(value):
+    """Recursively convert values to JSON-safe primitives.
+
+    - NaN/Inf -> None
+    - numpy scalar types -> native Python types
+    """
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        v = float(value)
+        return v if math.isfinite(v) else None
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+
+    return value
+
+
+def _get_free_local_port() -> int:
+    """Return an available localhost TCP port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+# ---------------------------------------------------------------------------
+# Optical-image helper
+# ---------------------------------------------------------------------------
+def _process_optical_image(dataset) -> dict | None:
     try:
         df_ids = dataset.optical_images.get_ids()
         if df_ids.empty:
             return None
-            
-        # Prefer the 'Overview Image' which is always present in standard exports
-        overview_ids = df_ids[df_ids['name'] == 'Overview Image']
-        img_id = overview_ids.iloc[0]['id'] if not overview_ids.empty else df_ids.iloc[0]['id']
+
+        overview = df_ids[df_ids["name"] == "Overview Image"]
+        img_id = overview.iloc[0]["id"] if not overview.empty else df_ids.iloc[0]["id"]
         opt_img = dataset.optical_images.get_image(img_id)
-        
-        pil_img = Image.open(io.BytesIO(opt_img.data)).convert("RGBA")
-        
-        # Downsample for faster rendering
+
+        pil = Image.open(io.BytesIO(opt_img.data)).convert("RGBA")
         max_dim = 1500
-        if pil_img.width > max_dim or pil_img.height > max_dim:
-            ratio = min(max_dim/pil_img.width, max_dim/pil_img.height)
-            new_size = (int(pil_img.width*ratio), int(pil_img.height*ratio))
-            pil_img = pil_img.resize(new_size, Image.Resampling.LANCZOS)
-            W, H = pil_img.width / ratio, pil_img.height / ratio
-        else:
-            W, H = pil_img.width, pil_img.height
-            
-        T = np.array(opt_img.px2world)
-        x0, y0 = T[0, 3], T[1, 3]
-        sizex_raw, sizey_raw = T[0, 0] * W, T[1, 1] * H
-        
-        # Handle negative transforms by flipping the image
-        if sizex_raw < 0: pil_img = pil_img.transpose(Image.FLIP_LEFT_RIGHT)
-        if sizey_raw < 0: pil_img = pil_img.transpose(Image.FLIP_TOP_BOTTOM)
-            
-        # Encode the oriented image
-        buffered = io.BytesIO()
-        pil_img.save(buffered, format="PNG")
-        img_str = base64.b64encode(buffered.getvalue()).decode()
-        
-        return dict(
-            source="data:image/png;base64," + img_str,
-            xref="x", yref="y",
-            x=min(x0, x0 + sizex_raw),
-            y=min(y0, y0 + sizey_raw),
-            xanchor="left", yanchor="top",
-            sizex=abs(sizex_raw), sizey=abs(sizey_raw),
-            sizing="stretch", opacity=1.0, layer="below"
-        )
-    except (AttributeError, KeyError, IndexError) as e:
-        print(f"Warning: Dataset structure does not support optical images: {e}")
-    except Exception as e:
-        print(f"Unexpected error loading optical image: {e}")
-    return None
-
-# --- UI Definition ---
-app_ui = ui.page_sidebar(
-    ui.sidebar(
-        ui.card(
-            ui.card_header("Choose .slx file"),
-            ui.input_action_button("btn_browse", "Browse...", icon=fa.icon_svg("folder-open")),
-            ui.output_text("txt_path"),
-        ),
-        ui.card(
-            ui.card_header("Start Export"),
-            ui.input_action_button("btn_process", "Start", icon=fa.icon_svg("file-export"), class_="btn-primary", disabled=True),
-            ui.output_ui("ui_selection_status"),
-            ui.p("Click the button to start the export process. Ensure you have selected regions and feature lists."),
-        ),
-        ui.card(
-            ui.card_header("Normalizations - For Info Only"),
-            ui.output_data_frame("spot_image_table"),
-            full_screen=True,
-        ),
-        ui.card(
-            ui.card_header("Advanced Options"),
-            ui.input_numeric("slice_thickness", "Slice Thickness (µm)", value=10, min=1),
-        ),
-        title="SCiLS Exporter Controls",
-        width="20%",
-    ),
-    ui.head_content(
-        ui.tags.style("""
-            /* Region Table Optimization (Native Table Logic) */
-            #region_table table { table-layout: auto !important; width: 100% !important; }
-            
-            /* Shrink-wrap technical columns: Color, Type, nPx, subRegions */
-            #region_table th:nth-child(1), #region_table td:nth-child(1),
-            #region_table th:nth-child(3), #region_table td:nth-child(3),
-            #region_table th:nth-child(4), #region_table td:nth-child(4),
-            #region_table th:nth-child(5), #region_table td:nth-child(5) { 
-                width: 1% !important; 
-                white-space: nowrap !important; 
-            }
-            
-            /* Greedy Name column: Expands to fill, wraps only if necessary */
-            #region_table th:nth-child(2), #region_table td:nth-child(2) { 
-                width: auto !important; 
-                white-space: normal !important; 
-                word-break: break-word !important;
-            }
-        """)
-    ),
-    ui.layout_columns(
-        ui.div(
-            ui.card(
-                ui.card_header("Region Tree"),
-                ui.div(
-                    ui.input_action_button("btn_regions_all", "Select All", class_="btn-sm"),
-                    ui.input_action_button("btn_regions_none", "Clear", class_="btn-sm"),
-                    class_="d-flex gap-2 mb-2"
-                ),
-                ui.input_switch("folder_as_unit", "Export Folders as Unit", value=False),
-                ui.output_data_frame("region_table"),
-                full_screen=True,
-                style="flex: 1 1 50%; min-height: 0;"
-            ),
-            ui.card(
-                output_widget("region_plot"),
-                full_screen=True,
-                style="flex: 1 1 50%; min-height: 0;"
-            ),
-            class_="d-flex flex-column h-100 gap-3"
-        ),
-        ui.div(
-            ui.card(
-                ui.card_header("Feature Lists"),
-                ui.div(
-                    ui.input_action_button("btn_features_all", "Select All", class_="btn-sm"),
-                    ui.input_action_button("btn_features_none", "Clear", class_="btn-sm"),
-                    class_="d-flex gap-2 mb-2"
-                ),
-                ui.output_data_frame("feature_table"),
-                full_screen=True,
-                style="flex: 1 1 50%; min-height: 0;"
-            ),
-            ui.card(
-                ui.card_header("Feature Details"),
-                ui.output_data_frame("feature_details_table"),
-                full_screen=True,
-                style="flex: 1 1 50%; min-height: 0;"
-            ),
-            class_="d-flex flex-column h-100 gap-3"
-        ),
-        col_widths=[6, 6]
-    ),
-    title="SCiLS Exporter",
-    fillable=True,
-)
-
-# --- Server Logic ---
-def server(input: Inputs, output: Outputs, session: Session):
-    # --- State Definitions ---
-    slx_path = reactive.Value(None)
-    slx_regions = reactive.Value(pd.DataFrame())
-    slx_regions_styles = reactive.Value([])
-    slx_feature_lists = reactive.Value(pd.DataFrame())
-    slx_spot_images = reactive.Value(pd.DataFrame())
-    slx_feature_details = reactive.Value(pd.DataFrame())
-    slx_optical_image = reactive.Value(None)
-    slx_features_cache = reactive.Value({})
-    leaf_id_to_trace_index = reactive.Value({})
-    
-    fig = go.FigureWidget()
-    fig.update_layout(
-        yaxis=dict(
-            autorange='reversed', title=None, showticklabels=False, 
-            showgrid=False, zeroline=False, scaleanchor='x', scaleratio=1
-        ),
-        xaxis=dict(
-            title=None, showticklabels=False, 
-            showgrid=False, zeroline=False
-        ),
-        showlegend=False,
-        margin=dict(l=0, r=0, t=0, b=0),
-        dragmode='pan', hovermode='closest',
-        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
-    )
-    
-    # --- Loading Logic ---
-    @reactive.effect
-    @reactive.event(input.btn_browse)
-    def _():
-        print("Browse button clicked")
-        path = select_file()
-        if path:
-            print(f"Selected file: {path}")
-            slx_path.set(path)
-            
-    @reactive.effect
-    def _load_dataset():
-        path = slx_path()
-        if not path or not os.path.exists(path):
-            return
-
-        ui.notification_show("Trying to access SCiLS file...", type="message")
-        try:
-            with sl.LocalSession(path) as slx_file:
-                dataset = slx_file.dataset_proxy
-                
-                # 1. Load Feature Lists
-                fl = dataset.feature_table.get_feature_lists()
-                fl_display = fl.rename(columns={
-                    "num_features": "nFeat", "has_mz_features": "mzFeat",
-                    "has_mobility_intervals": "mobilityIntervals", "has_ccs_features": "ccsFeatures"
-                })
-                if "has_external_features" in fl_display.columns:
-                    fl_display = fl_display.drop(columns=["has_external_features"])
-                slx_feature_lists.set(fl_display)
-                
-                # 1b. Cache all features for all lists to avoid re-opening the file later
-                print(f"Caching features for {len(fl)} lists...")
-                cache = {}
-                for list_id in fl["id"]:
-                    cache[list_id] = dataset.feature_table.get_features(list_id)
-                slx_features_cache.set(cache)
-                
-                # 2. Load Normalizations
-                normalizations = dataset.get_normalizations()
-                slx_spot_images.set(pd.DataFrame([{"name": name} for uid, name in normalizations.items()]))
-                
-                # 3. Load Optical Image
-                slx_optical_image.set(process_optical_image(dataset))
-                
-                # 4. Load Regions
-                root_region = dataset.get_region_tree()
-                all_regions = root_region.get_all_regions()
-                print(f"Found {len(all_regions)} regions in total")
-                
-                # Performance Optimization: Single-pass recursive stats collection
-                # This avoids O(N^2) traversals and redundant API calls for folder spot counts
-                stats_cache = {}
-                def collect_stats(r):
-                    if r.id in stats_cache:
-                        return stats_cache[r.id]
-                    
-                    if not r.subregions:
-                        # Leaf node: get actual spots from API (or node if available)
-                        try:
-                            # Some API versions might have spots pre-populated
-                            if hasattr(r, 'spots') and isinstance(r.spots, dict) and 'spot_id' in r.spots:
-                                num_spots = len(r.spots['spot_id'])
-                            else:
-                                spots = dataset.get_region_spots(r.id)
-                                num_spots = len(spots.get('spot_id', [])) if isinstance(spots, dict) else 0
-                        except Exception:
-                            num_spots = 0
-                        res = ([(r.id, r.name)], num_spots)
-                    else:
-                        # Folder node: aggregate from children
-                        all_leaves, total_spots = [], 0
-                        for sub in r.subregions:
-                            leaves, spots = collect_stats(sub)
-                            all_leaves.extend(leaves)
-                            total_spots += spots
-                        res = (all_leaves, total_spots)
-                    
-                    stats_cache[r.id] = res
-                    return res
-
-                # Pre-calculate all stats
-                ui.notification_show("Analyzing region hierarchy...", type="message")
-                collect_stats(root_region)
-
-                cmap = plt.get_cmap('tab20')
-                regions_data, trace_data, styles = [], [], []
-                
-                # Base styles for column widths are now handled via CSS for better reliability
-                # but we still use the styles list for row-specific colors.
-                idx, trace_idx = 0, 0
-                leaf_mapping = {}
-                for r in all_regions:
-                    # Skip the root "Regions" folder as it's redundant
-                    if r.name == "Regions" and len(r.subregions) > 0:
-                        continue
-
-                    # Use pre-calculated stats
-                    leaf_info, num_spots = stats_cache.get(r.id, ([], 0))
-                    
-                    # Original names for backend/CLI
-                    full_leaf_names = [info[1] for info in leaf_info]
-                    leaf_ids = [str(info[0]) for info in leaf_info]
-                    is_leaf = len(r.subregions) == 0
-                    
-                    # Cleaned name for display
-                    display_name = r.name[8:] if r.name.startswith("Regions/") else r.name
-                    
-                    color = cmap(idx % 20)
-                    hex_color = '#%02x%02x%02x' % (int(color[0]*255), int(color[1]*255), int(color[2]*255))
-                    
-                    regions_data.append({
-                        "Color": "", 
-                        "name": display_name, 
-                        "Type": "Leaf" if is_leaf else "Folder",
-                        "nPx": num_spots, 
-                        "subRegions": len(r.subregions),
-                        "leaf_names": ",".join(full_leaf_names), # CLI expects original names
-                        "leaf_ids": ",".join(leaf_ids),
-                        "full_name": r.name # Keep original for reference
-                    })
-                    styles.append({"rows": [idx], "cols": [0], "style": {"background-color": hex_color}})
-                    
-                    # Only plot polygons for LEAF regions to avoid redundant overlays
-                    if is_leaf and hasattr(r, 'polygons'):
-                        xs, ys = [], []
-                        for poly in r.polygons:
-                            if len(poly) > 0:
-                                poly_xs = [p.x for p in poly]
-                                poly_ys = [p.y for p in poly]
-                                # Close the polygon by repeating the first point
-                                poly_xs.append(poly_xs[0])
-                                poly_ys.append(poly_ys[0])
-                                xs.extend(poly_xs); xs.append(None)
-                                ys.extend(poly_ys); ys.append(None)
-                        
-                        if xs:
-                            trace_data.append(dict(
-                                x=xs, y=ys, fill='toself', mode='lines',
-                                line=dict(color=hex_color, width=3),
-                                fillcolor=f'rgba({int(color[0]*255)}, {int(color[1]*255)}, {int(color[2]*255)}, 0.0)',
-                                name=r.name, hoverinfo='name', hoverlabel=dict(namelength=-1)
-                            ))
-                            leaf_mapping[str(r.id)] = trace_idx
-                            trace_idx += 1
-                    idx += 1
-                
-                # Perform bulk plot update in a single atomic operation
-                with fig.batch_update():
-                    # go.FigureWidget requires clearing and then adding traces in bulk
-                    # to avoid the 'permutation of a subset' validation error.
-                    fig.data = []
-                    if trace_data:
-                        fig.add_traces([go.Scatter(**td) for td in trace_data])
-                    
-                    # Also ensure layout (optical image) is updated here
-                    if slx_optical_image():
-                        fig.update_layout(images=[slx_optical_image()])
-
-                # Finalize by updating reactive states all at once
-                slx_regions.set(pd.DataFrame(regions_data))
-                slx_regions_styles.set(styles)
-                leaf_id_to_trace_index.set(leaf_mapping)
-                
-                print(f"Loaded {len(regions_data)} total regions. {len(trace_data)} leaf traces created.")
-                
-            ui.notification_show("SCiLS file access successful. Please choose regions and feature lists to export.", type="message")
-        except FileNotFoundError:
-            ui.notification_show(f"File not found: {path}", type="error")
-        except PermissionError:
-            ui.notification_show(f"Permission denied accessing: {path}. Is it open in SCiLS Lab?", type="error")
-        except Exception as e:
-            ui.notification_show(f"Error accessing SCiLS file: {str(e)}", type="error")
-            print(f"Detailed loading error: {e}")
-
-    # --- UI Logic & Selection ---
-    @reactive.effect
-    def _update_ui_state():
-        # Enable start button only if file and regions/features are selected
-        try:
-            reg_sel = region_table.cell_selection()["rows"]
-            feat_sel = feature_table.cell_selection()["rows"]
-            ready = (slx_path() is not None and len(reg_sel) > 0 and len(feat_sel) > 0)
-            ui.update_action_button("btn_process", disabled=not ready)
-        except Exception:
-            ui.update_action_button("btn_process", disabled=True)
-
-    # --- Button Handlers ---
-    @reactive.effect
-    @reactive.event(input.btn_regions_all)
-    async def _regions_all():
-        df = slx_regions()
-        if not df.empty:
-            await region_table.update_cell_selection({"type": "row", "rows": list(range(len(df)))})
-
-    @reactive.effect
-    @reactive.event(input.btn_regions_none)
-    async def _regions_none():
-        await region_table.update_cell_selection({"type": "row", "rows": []})
-
-    @reactive.effect
-    @reactive.event(input.btn_features_all)
-    async def _features_all():
-        df = slx_feature_lists()
-        if not df.empty:
-            await feature_table.update_cell_selection({"type": "row", "rows": list(range(len(df)))})
-
-    @reactive.effect
-    @reactive.event(input.btn_features_none)
-    async def _features_none():
-        await feature_table.update_cell_selection({"type": "row", "rows": []})
-
-    @reactive.effect
-    def _update_feature_details():
-        try:
-            selected_indices = feature_table.cell_selection()["rows"]
-        except Exception:
-            selected_indices = []
-            
-        path = slx_path()
-        cache = slx_features_cache()
-        
-        if not path or not selected_indices or not cache:
-            slx_feature_details.set(pd.DataFrame())
-            return
-
-        fl_df = slx_feature_lists()
-        selected_ids = fl_df.iloc[list(selected_indices)]["id"].tolist()
-        
-        try:
-            all_features = []
-            for list_id in selected_ids:
-                if list_id in cache:
-                    all_features.append(cache[list_id])
-            
-            if all_features:
-                df = pd.concat(all_features, ignore_index=True)
-                # Remove duplicates as some list might overlap (e.g. "All features" vs sub-list)
-                df = df.drop_duplicates(subset=["id"])
-                
-                # Add mz_center/centroid for convenience
-                df["mz_center"] = (df["mz_low"] + df["mz_high"]) / 2
-                # Add mz width in ppm
-                # ppm = (delta_mz / mz_center) * 10^6
-                df["mz width [ppm]"] = ((df["mz_high"] - df["mz_low"]) / df["mz_center"]) * 1e6
-                
-                # Sort by mz_center
-                df = df.sort_values("mz_center")
-
-                # Round values for display: 4 digits for mz, 1 digit for ppm
-                for col in ["mz_center", "mz_low", "mz_high"]:
-                    if col in df.columns:
-                        df[col] = df[col].round(4)
-                if "mz width [ppm]" in df.columns:
-                    df["mz width [ppm]"] = df["mz width [ppm]"].round(1)
-                
-                # Order columns as requested: id, name, mz_center, mz width, mz_low, mz_high
-                available_cols = [c for c in ["id", "name", "mz_center", "mz width [ppm]", "mz_low", "mz_high"] if c in df.columns]
-                slx_feature_details.set(df[available_cols])
-            else:
-                slx_feature_details.set(pd.DataFrame())
-        except Exception as e:
-            print(f"Error updating feature details from cache: {e}")
-            slx_feature_details.set(pd.DataFrame())
-
-    @reactive.effect
-    def _update_plot_selection():
-        try:
-            selected_rows = region_table.cell_selection()["rows"]
-            reg_df = slx_regions()
-            mapping = leaf_id_to_trace_index()
-        except Exception:
-            selected_rows = []
-            reg_df = pd.DataFrame()
-            mapping = {}
-            
-        # Expand selected rows to unique leaf IDs
-        selected_leaf_ids = set()
-        if not reg_df.empty and selected_rows:
-            for idx in selected_rows:
-                ids_str = reg_df.iloc[idx].get("leaf_ids", "")
-                if ids_str:
-                    for lid in ids_str.split(","):
-                        selected_leaf_ids.add(lid.strip())
-        
-        # Determine which traces to highlight once
-        target_trace_indices = {mapping[lid] for lid in selected_leaf_ids if lid in mapping}
-
-        with fig.batch_update():
-            for i, trace in enumerate(fig.data):
-                c = trace.line.color
-                r_val, g_val, b_val = (int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16)) if c.startswith('#') else (128,128,128)
-                
-                if i in target_trace_indices:
-                    trace.line.width = 5
-                    trace.fillcolor = f"rgba({r_val}, {g_val}, {b_val}, 0.5)"
-                else:
-                    trace.line.width = 3
-                    trace.fillcolor = f"rgba({r_val}, {g_val}, {b_val}, 0.0)"
-
-    # --- Export Execution ---
-    @reactive.effect
-    @reactive.event(input.btn_process)
-    def _run_export():
-        path = slx_path()
-        try:
-            selected_region_indices = region_table.cell_selection()["rows"]
-            selected_feature_indices = feature_table.cell_selection()["rows"]
-        except Exception:
-            selected_region_indices = []
-            selected_feature_indices = []
-        
-        if not path or not selected_region_indices:
-            ui.notification_show("Please select at least one region.", type="warning")
-            return
-            
-        ui.notification_show("Starting export. This might take a while. Please wait...", type="message")
-        try:
-            reg_df, feat_df = slx_regions(), slx_feature_lists()
-            
-            # Expand regions based on selection mode
-            folder_as_unit = input.folder_as_unit()
-            all_selected_regions = set()
-            for idx in selected_region_indices:
-                row = reg_df.iloc[idx]
-                if row["Type"] == "Folder" and folder_as_unit:
-                    all_selected_regions.add(row["full_name"])
-                else:
-                    all_selected_regions.update(row["leaf_names"].split(","))
-            
-            sel_regions = list(all_selected_regions)
-            sel_features = feat_df.iloc[list(selected_feature_indices)]["name"].tolist()
-        except (KeyError, IndexError) as e:
-            ui.notification_show(f"Selection data error: Could not find metadata. ({e})", type="error")
-            return
-        except Exception as e:
-            ui.notification_show(f"Data processing error: {e}", type="error")
-            return
-
-        # Prepare JSON context
-        data = {
-            "description": "SCiLS-2-ImzML::@::Cemos", "version": "0.1", "date": str(datetime.datetime.now()),
-            "data_exports": [{
-                "filename": path, "outputpath": None, "slice_thickness": input.slice_thickness(),
-                "spot_images": None, "optical_images": None, "featurelists": sel_features,
-                "regions": sel_regions, "regions_as_labels": None, "labels": None
-            }]
-        }
-
-        
-        json_file = os.path.join(os.path.dirname(path), f"{pathlib.Path(path).stem}.json")
-        with open(json_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4)
-            
-        try:
-            json_abs_path = os.path.abspath(json_file)
-            print(f"Executing export tool for: {json_abs_path}")
-            process = subprocess.run([sys.executable, "-m", "slx2imzml", json_abs_path], check=False)
-            
-            if process.returncode == 0:
-                out_dir = os.path.dirname(path)
-                ui.notification_show(f"Export completed successfully! Files saved to: {out_dir}", type="message", duration=15)
-            else:
-                ui.notification_show(f"Export tool failed (Code: {process.returncode}).", type="error", duration=15)
-        except FileNotFoundError:
-            ui.notification_show("Python executable or slx2imzml module not found.", type="error")
-        except subprocess.SubprocessError as e:
-            ui.notification_show(f"Export process failed to start: {str(e)}", type="error")
-        except Exception as e:
-            ui.notification_show(f"Unexpected execution failure: {str(e)}", type="error")
-
-    # --- Renderers ---
-    @output
-    @render.text
-    def txt_path():
-        return slx_path() or "No file selected"
-
-    @output
-    @render.data_frame
-    def region_table():
-        df = slx_regions()
-        if df.empty:
-            return None
-        # Drop internal columns for display
-        cols_to_drop = ["leaf_names", "leaf_ids", "full_name"]
-        display_df = df.drop(columns=[c for c in cols_to_drop if c in df.columns])
-        return render.DataGrid(display_df, selection_mode="rows", styles=slx_regions_styles(), height="100%")
-        
-    @output
-    @render_widget
-    def region_plot():
-        if slx_regions().empty: return None
-        fig.update_layout(images=[slx_optical_image()] if slx_optical_image() else [])
-        return fig
-
-    @output
-    @render.data_frame
-    def feature_table():
-        df = slx_feature_lists()
-        return render.DataGrid(df, selection_mode="rows", height="100%") if not df.empty else None
-
-    @output
-    @render.data_frame
-    def spot_image_table():
-        df = slx_spot_images()
-        return render.DataGrid(df, selection_mode="none", height="200px") if not df.empty else None
-
-    @output
-    @render.data_frame
-    def feature_details_table():
-        df = slx_feature_details()
-        if df.empty:
-            return None
-        # Set height to show ~10 rows at a time
-        return render.DataGrid(df, selection_mode="none", height="100%")
-
-    @output
-    @render.ui
-    def ui_selection_status():
-        try:
-            r = region_table.cell_selection()["rows"]
-            f = feature_table.cell_selection()["rows"]
-            reg_df, feat_df = slx_regions(), slx_feature_lists()
-            
-            # Expand selected regions for status display (respects folder_as_unit toggle)
-            folder_as_unit = input.folder_as_unit()
-            all_selected_regions = set()
-            if not reg_df.empty and r:
-                for idx in r:
-                    row = reg_df.iloc[idx]
-                    if row["Type"] == "Folder" and folder_as_unit:
-                        all_selected_regions.add(row["full_name"])
-                    else:
-                        all_selected_regions.update(row["leaf_names"].split(","))
-            
-            sel_regions = list(all_selected_regions)
-            sel_features = feat_df.iloc[list(f)]["name"].tolist() if not feat_df.empty and f else []
-            
-            # Clean names for display
-            sel_regions_display = [n[8:] if n.startswith("Regions/") else n for n in sel_regions]
-            
-            num_regions = len(sel_regions_display)
-            if num_regions <= 5:
-                regions_text = ", ".join(sel_regions_display)
-            else:
-                regions_text = ", ".join(sel_regions_display[:3]) + ", ..., " + ", ".join(sel_regions_display[-2:])
-            
-            region_count_label = "total regions" if input.folder_as_unit() else "total leaf regions"
-            return ui.div(
-                ui.h6("Currently Selected:", class_="fw-bold mb-2"),
-                ui.div(
-                    ui.span("Regions:", class_="fw-semibold me-2"), 
-                    ui.span(regions_text or "None", class_="text-muted"), 
-                    ui.span(f" ({num_regions} {region_count_label})" if num_regions > 0 else "", class_="small text-primary ms-2"),
-                    class_="mb-1 text-break"
-                ),
-                ui.div(ui.span("Features:", class_="fw-semibold me-2"), ui.span(", ".join(sel_features) or "None", class_="text-muted"), class_="text-break"),
-                class_="mt-3 mb-3 p-3 border rounded bg-light"
+        if pil.width > max_dim or pil.height > max_dim:
+            ratio = min(max_dim / pil.width, max_dim / pil.height)
+            pil = pil.resize(
+                (int(pil.width * ratio), int(pil.height * ratio)),
+                Image.Resampling.LANCZOS,
             )
-        except Exception:
-            return ui.div(ui.h6("Currently Selected:", class_="fw-bold mb-2"), class_="mt-3 mb-3 p-3 border rounded bg-light")
+            W, H = pil.width / ratio, pil.height / ratio
+        else:
+            W, H = float(pil.width), float(pil.height)
 
-app = App(app_ui, server)
+        T = np.array(opt_img.px2world)
+        x0, y0 = float(T[0, 3]), float(T[1, 3])
+        sx, sy = float(T[0, 0]) * W, float(T[1, 1]) * H
 
+        if sx < 0:
+            pil = pil.transpose(Image.FLIP_LEFT_RIGHT)
+        if sy < 0:
+            pil = pil.transpose(Image.FLIP_TOP_BOTTOM)
+
+        buf = io.BytesIO()
+        pil.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+
+        return dict(
+            source="data:image/png;base64," + b64,
+            xref="x", yref="y",
+            x=min(x0, x0 + sx),
+            y=min(y0, y0 + sy),
+            xanchor="left", yanchor="top",
+            sizex=abs(sx), sizey=abs(sy),
+            sizing="stretch", opacity=1.0, layer="below",
+        )
+    except Exception as exc:
+        print(f"[optical] {exc}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Routes — pages
+# ---------------------------------------------------------------------------
+@app.get("/")
+def index():
+    return render_template("index.html")
+
+
+# ---------------------------------------------------------------------------
+# Routes — API
+# ---------------------------------------------------------------------------
+@app.post("/api/browse")
+def api_browse():
+    """Open a native file dialog and return the chosen path.
+
+    Tkinter file dialogs require the main thread. Flask requests may run in
+    worker threads, so we launch the dialog in a short-lived subprocess to
+    keep this endpoint safe regardless of server threading mode.
+    """
+    dialog_script = (
+        "import tkinter as tk; "
+        "from tkinter import filedialog; "
+        "root=tk.Tk(); "
+        "root.withdraw(); "
+        "root.attributes('-topmost', True); "
+        "path=filedialog.askopenfilename(filetypes=[('SCiLS Lab files','*.slx')]); "
+        "root.destroy(); "
+        "print(path or '')"
+    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", dialog_script],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        path = (completed.stdout or "").strip()
+        return jsonify({"path": path})
+    except Exception as exc:
+        return jsonify({"path": "", "error": str(exc)}), 500
+
+
+@app.post("/api/load")
+def api_load():
+    """Load an .slx file and populate STATE."""
+    body = request.get_json(force=True)
+    path: str = body.get("path", "").strip()
+
+    if not path or not os.path.exists(path):
+        return jsonify({"ok": False, "error": f"File not found: {path}"}), 400
+
+    session = None
+    try:
+        # SCiLS defaults to port 8086. That port may already be used by another
+        # SCiLS process, so pick a free localhost port per session.
+        session = sl.LocalSession(path, port=_get_free_local_port())
+        with session as slx:
+            dataset = slx.dataset_proxy
+
+            # ── Feature lists ─────────────────────────────────────────────
+            fl = dataset.feature_table.get_feature_lists()
+            fl_display = fl.rename(columns={
+                "num_features": "nFeat",
+                "has_mz_features": "mzFeat",
+                "has_mobility_intervals": "mobilityIntervals",
+                "has_ccs_features": "ccsFeatures",
+            })
+            if "has_external_features" in fl_display.columns:
+                fl_display = fl_display.drop(columns=["has_external_features"])
+            STATE["feature_lists"] = fl_display.to_dict("records")
+
+            # ── Feature cache ─────────────────────────────────────────────
+            cache: dict = {}
+            for list_id in fl["id"]:
+                cache[list_id] = dataset.feature_table.get_features(list_id, mode="area").to_dict("records")
+            STATE["features_cache"] = cache
+
+            # ── Normalizations ────────────────────────────────────────────
+            norms = dataset.get_normalizations()
+            STATE["normalizations"] = [{"name": name} for _, name in norms.items()]
+
+            # ── Optical image ─────────────────────────────────────────────
+            STATE["plot_image"] = _process_optical_image(dataset)
+
+            # ── Regions ───────────────────────────────────────────────────
+            root_region = dataset.get_region_tree()
+            all_regions = root_region.get_all_regions()
+
+            cmap = plt.get_cmap("tab20")
+            regions_data, traces = [], []
+            idx = 0
+
+            for r in all_regions:
+                if r.name == "Regions":
+                    continue
+
+                try:
+                    if hasattr(r, "spots") and isinstance(r.spots, dict) and "spot_id" in r.spots:
+                        num_spots = len(r.spots["spot_id"])
+                    else:
+                        spots = dataset.get_region_spots(r.id)
+                        num_spots = len(spots.get("spot_id", [])) if isinstance(spots, dict) else 0
+                except Exception:
+                    num_spots = 0
+
+                display_name = r.name[8:] if r.name.startswith("Regions/") else r.name
+                color = cmap(idx % 20)
+                hex_color = "#%02x%02x%02x" % (
+                    int(color[0] * 255), int(color[1] * 255), int(color[2] * 255)
+                )
+                r_int = int(color[0] * 255)
+                g_int = int(color[1] * 255)
+                b_int = int(color[2] * 255)
+
+                regions_data.append({
+                    "color": hex_color,
+                    "name": display_name,
+                    "nPx": int(num_spots),
+                    "full_name": r.name,
+                })
+
+                if hasattr(r, "polygons"):
+                    xs, ys = [], []
+                    for poly in r.polygons:
+                        if poly:
+                            px = [p.x for p in poly]
+                            py = [p.y for p in poly]
+                            px.append(px[0]); py.append(py[0])
+                            xs.extend(px); xs.append(None)
+                            ys.extend(py); ys.append(None)
+                    if xs:
+                        traces.append({
+                            "x": xs, "y": ys,
+                            "fill": "toself", "mode": "lines",
+                            "line": {"color": hex_color, "width": 3},
+                            "fillcolor": f"rgba({r_int},{g_int},{b_int},0.0)",
+                            "name": r.name,
+                            "hoverinfo": "name",
+                            "hoverlabel": {"namelength": -1},
+                            "type": "scatter",
+                        })
+
+                idx += 1
+
+            STATE["slx_path"] = path
+            STATE["regions"] = regions_data
+            STATE["plot_traces"] = traces
+
+    except PermissionError:
+        return jsonify({"ok": False, "error": f"Permission denied — is the file open in SCiLS Lab?"}), 403
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    finally:
+        # Explicit shutdown after selection data is generated.
+        # (close() is idempotent in scilslab and safe if the context manager
+        # has already closed the process.)
+        if session is not None:
+            try:
+                session.close()
+            except Exception as close_exc:
+                print(f"[scilslab] warning: failed to close LocalSession cleanly: {close_exc}")
+
+    return jsonify({
+        "ok": True,
+        "regions": STATE["regions"],
+        "feature_lists": _json_safe(STATE["feature_lists"]),
+        "normalizations": STATE["normalizations"],
+        "plot_traces": STATE["plot_traces"],
+        "plot_image": STATE["plot_image"],
+    })
+
+
+@app.post("/api/features")
+def api_features():
+    """Return merged feature details for a list of feature-list IDs."""
+    body = request.get_json(force=True)
+    ids: list = body.get("ids", [])
+    include_ccs: bool = bool(body.get("include_ccs", True))
+
+    cache = STATE["features_cache"]
+    all_rows: list[dict] = []
+    seen_ids: set = set()
+
+    for lid in ids:
+        # IDs may arrive as strings or ints
+        key = lid if lid in cache else (int(lid) if isinstance(lid, str) else str(lid))
+        rows = cache.get(key, [])
+        for row in rows:
+            rid = row.get("id")
+            if rid not in seen_ids:
+                seen_ids.add(rid)
+                all_rows.append(dict(row))
+
+    # Compute derived columns
+    def _safe_float(value):
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(v):
+            return None
+        return v
+
+    def _safe_round(value, digits):
+        v = _safe_float(value)
+        if v is None:
+            return None
+        return round(v, digits)
+
+    for row in all_rows:
+        mz_lo_raw = row.get("mz_low")
+        mz_hi_raw = row.get("mz_high")
+        mz_lo = _safe_float(mz_lo_raw)
+        mz_hi = _safe_float(mz_hi_raw)
+
+        if mz_lo is not None and mz_hi is not None:
+            mz_c = (mz_lo + mz_hi) / 2
+            row["mz_center"] = _safe_round(mz_c, 4)
+            row["mz_low"] = _safe_round(mz_lo, 4)
+            row["mz_high"] = _safe_round(mz_hi, 4)
+            row["mz_width_ppm"] = _safe_round(((mz_hi - mz_lo) / mz_c) * 1e6, 1) if mz_c else None
+        else:
+            row["mz_center"] = None
+            row["mz_low"] = _safe_round(mz_lo_raw, 4)
+            row["mz_high"] = _safe_round(mz_hi_raw, 4)
+            row["mz_width_ppm"] = None
+        if include_ccs:
+            ccs_lo = _safe_round(row.get("ccs_low"), 2) if "ccs_low" in row else None
+            ccs_hi = _safe_round(row.get("ccs_high"), 2) if "ccs_high" in row else None
+            if "ccs_low" in row:
+                row["ccs_low"] = ccs_lo
+            if "ccs_high" in row:
+                row["ccs_high"] = ccs_hi
+            if ccs_lo is not None and ccs_hi is not None:
+                row["ccs_center"] = _safe_round((ccs_lo + ccs_hi) / 2, 2)
+            elif "ccs_low" in row or "ccs_high" in row:
+                row["ccs_center"] = None
+        else:
+            row.pop("ccs_low", None)
+            row.pop("ccs_high", None)
+            row.pop("ccs_center", None)
+
+    all_rows.sort(key=lambda r: (r.get("mz_center") is None, r.get("mz_center") or 0))
+    return jsonify({"ok": True, "features": _json_safe(all_rows)})
+
+
+@app.post("/api/export")
+def api_export():
+    """Write a JSON config and invoke the slx2imzml exporter."""
+    body = request.get_json(force=True)
+    selected_region_indices: list[int] = body.get("region_indices", [])
+    selected_feature_indices: list[int] = body.get("feature_indices", [])
+    include_ccs: bool = bool(body.get("include_ccs", True))
+    slice_thickness: int = int(body.get("slice_thickness", 10))
+
+    path = STATE["slx_path"]
+    if not path:
+        return jsonify({"ok": False, "error": "No file loaded."}), 400
+
+    reg_df = STATE["regions"]
+    feat_df = STATE["feature_lists"]
+
+    selected_regions: list[str] = []
+    seen_regions: set[str] = set()
+    for i in selected_region_indices:
+        row = reg_df[i]
+        region_name = row.get("full_name")
+        if region_name and region_name not in seen_regions:
+            seen_regions.add(region_name)
+            selected_regions.append(region_name)
+
+    sel_features = [feat_df[i]["name"] for i in selected_feature_indices]
+
+    data = {
+        "description": "SCiLS-2-ImzML::@::Cemos",
+        "version": "0.1",
+        "date": str(datetime.datetime.now()),
+        "data_exports": [{
+            "filename": path,
+            "outputpath": None,
+            "slice_thickness": slice_thickness,
+            "spot_images": None,
+            "optical_images": None,
+            "featurelists": sel_features,
+            "include_ccs": include_ccs,
+            "regions": selected_regions,
+            "regions_as_labels": None,
+            "labels": None,
+        }],
+    }
+
+    json_file = os.path.join(
+        os.path.dirname(path), f"{pathlib.Path(path).stem}.json"
+    )
+    with open(json_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "slx2imzml", os.path.abspath(json_file)],
+            check=False,
+        )
+        if proc.returncode == 0:
+            return jsonify({"ok": True, "output_dir": os.path.dirname(path)})
+        return jsonify({"ok": False, "error": f"Exporter exited with code {proc.returncode}."}), 500
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import webbrowser
+    webbrowser.open("http://127.0.0.1:5001")
+    app.run(debug=False, port=5001, threaded=False)

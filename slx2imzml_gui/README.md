@@ -1,38 +1,48 @@
-# SCiLS Exporter PyShiny GUI
+# SCiLS Exporter — Flask/HTML5 GUI
 
-This directory contains the Python-based graphical user interface for the SCiLS-2-ImzML exporter.
+A clean, single-page web application that replaces the original PyShiny GUI.  
+Built with **Flask** (Python backend) + **HTML5 / Vanilla JS / Plotly.js** (frontend).
 
-## Installation and Setup
+## Stack
 
-To ensure the GUI functions correctly, the following files must be present in your target project:
-
-1.  **`slx2imzml_gui/app.py`**: The main PyShiny application.
-2.  **`slx2imzml/__main__.py`**: (CRITICAL!) This file must be in the `slx2imzml` package folder to enable the `python -m slx2imzml` command used by the GUI.
-
-### Install Dependencies
-
-Run the following command from your project root:
-
-```bash
-pip install -r slx2imzml_gui/requirements.txt
-```
-
-Ensure the `slx2imzml` package is installed in "Editable Mode" (the app will attempt to do this automatically on startup):
-
-```bash
-pip install -e .
-```
-
-## Running the App
-
-Execute the following command in your terminal:
-
-```bash
-python -m shiny run slx2imzml_gui/app.py
-```
+| Layer | Technology |
+|-------|-----------|
+| Backend | Flask 3 |
+| Template engine | Jinja2 (bundled with Flask) |
+| Frontend | Vanilla JS (ES2022), no framework |
+| Charts | Plotly.js (CDN, slim build) |
+| Styling | Hand-crafted CSS design system (no Bootstrap) |
 
 ## Features
 
-1.  **Browse**: Select a `.slx` file using a native Windows dialog.
-2.  **Tables**: Mark the desired regions and feature lists for export.
-3.  **Start**: Generates a configuration JSON and triggers the exporter in the background.
+* **Browse** — opens a native Windows file dialog to pick an `.slx` file.  
+* **Region Tree** — colour-coded table with multi-select (click + Shift-click), Select All / Clear.  
+* **Region Map** — interactive Plotly map; selected regions are highlighted with fill + thicker border.  
+* **Feature Lists** — selectable table; selecting a list loads per-feature details automatically.  
+* **Feature Details** — merged, de-duplicated table with computed `m/z center`, `ppm width`, and optional CCS columns.  
+* **Normalizations** — informational sidebar list.  
+* **Advanced Options** — slice thickness (µm) and *Include CCS Values* toggle.  
+* **Start Export** — writes a JSON config and calls `python -m slx2imzml` in a subprocess.  
+* Toast notifications for all async operations.
+
+## Installation
+
+```bash
+# From the project root:
+pip install flask matplotlib Pillow numpy
+# (scilslab and slx2imzml must already be available)
+```
+
+## Running
+
+```bash
+python slx2imzml_gui/launcher.py
+```
+
+Or directly:
+
+```bash
+python slx2imzml_gui/app.py
+```
+
+The app opens automatically at `http://127.0.0.1:5001`.

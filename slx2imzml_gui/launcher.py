@@ -1,13 +1,16 @@
-import pathlib
-import subprocess
-import sys
+"""Entry point — launch the Flask GUI and open a browser tab."""
+import webbrowser
+import threading
+from slx2imzml_gui.app import app
 
 
-def main() -> int:
-    app_path = pathlib.Path(__file__).with_name("app.py")
-    command = [sys.executable, "-m", "shiny", "run", "--launch-browser", str(app_path)]
-    return subprocess.call(command)
+def main():
+    port = 5001
+    url = f"http://localhost:{port}"
+    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    print(f"SCiLS Exporter running at {url}")
+    app.run(host="localhost", port=port, debug=False, use_reloader=False, threaded=False)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
