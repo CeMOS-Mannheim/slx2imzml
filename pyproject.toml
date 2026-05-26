@@ -20,16 +20,18 @@ dependencies = [
     "numpy",
     "pandas",
     "jinja2",
-    "matplotlib",
     "SimpleITK",
     "Pillow",
-    "shiny",
-    "faicons",
-    "plotly",
-    "shinywidgets",
 ]
 
 [project.optional-dependencies]
+gui = [
+    "flask>=3.0",
+    "matplotlib",
+    "numpy",
+    "Pillow",
+    "plotly",
+]
 test = [
     "pytest>=8.0",
     "pytest-cov>=5.0",

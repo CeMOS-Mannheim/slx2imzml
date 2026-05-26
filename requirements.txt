@@ -1,15 +1,8 @@
-# Core dependencies
+# Core converter dependencies
 numpy
 pandas
 jinja2
-matplotlib
 SimpleITK
 Pillow
-
-# GUI dependencies
-shiny
-faicons
-plotly
-shinywidgets
 
 # scilslab is vendor-provided (install separately)
