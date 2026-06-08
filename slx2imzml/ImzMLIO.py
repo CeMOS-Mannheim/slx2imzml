@@ -136,13 +136,13 @@ def main():
 
                 valid_spot_ids = slxFileHelper._union_spot_ids_for_regions(dataset, valid_region_ids)
 
-                def set_image_properties(image: sitk.Image, transpose_xy: bool = False) -> sitk.Image:
+                def set_image_properties(image: sitk.Image, transpose: tuple = None) -> sitk.Image:
                     """
                     Set spatial properties for region-based images.
                     
                     Args:
                         image: SimpleITK image to configure
-                        transpose_xy: Whether to transpose x/y before writing
+                        transpose: Tuple indicating the axes order for transposition
                         
                     Returns:
                         sitk.Image: Configured image with spatial properties
@@ -151,9 +151,10 @@ def main():
                     local_spacing = spacing
                     local_direction = direction
                     
-                    if transpose_xy:
+                    if transpose is not None:
+                        print(image.GetSize())
                         array = sitk.GetArrayFromImage(image)
-                        image = sitk.GetImageFromArray(np.transpose(array, (0, 2, 1)))
+                        image = sitk.GetImageFromArray(np.transpose(array, transpose))
                         local_spacing = np.array([spacing[1], spacing[0], spacing[2]])
                         # local_direction = direction[:, [1, 0, 2]]
                     
@@ -175,7 +176,7 @@ def main():
                         H_global=H_global,
                         mappings=mappings,
                     )
-                    oi = set_image_properties(rlImage, transpose_xy=True)
+                    oi = set_image_properties(rlImage, transpose=(0, 2, 1))
                     mask_path = f"{str(filename_without_extension / r_name)}.mask.nrrd"
                     sitk.WriteImage(oi, mask_path)
                     print(f"Exported region mask: {mask_path}")
@@ -184,7 +185,7 @@ def main():
                         dataset, r_id, final_regions_as_labels, slice_thickness,
                         W_global=W_global, H_global=H_global, mappings=mappings
                     )
-                    oi = set_image_properties(rlImage, transpose_xy=True)
+                    oi = set_image_properties(rlImage, transpose=(0, 2, 1))
                     mask_path = f"{str(filename_without_extension / r_name)}.mask.nrrd"
                     sitk.WriteImage(oi, mask_path)
                     print(f"Exported region mask: {mask_path}")
@@ -199,7 +200,7 @@ def main():
                     )
                     for name, image in sImages:
                         normalized_name = slxFileHelper.normalize(name)
-                        oi = set_image_properties(image, transpose_xy=True)
+                        oi = set_image_properties(image, transpose=(0, 2, 1))
                         spot_path = f"{str(filename_without_extension / r_name)}.{normalized_name}.nrrd"
                         sitk.WriteImage(oi, spot_path)
                         print(f"Exported spot image: {spot_path}")
@@ -223,11 +224,38 @@ def main():
                 else:
                     # Centroid mode: export specified features only
                     print(f"Using centroid mode ({final_features.shape[0]} features)")
-                    data = slxFileHelper.load_region_data_as_continuous_centroids(
+                    data, data_ccs = slxFileHelper.load_region_data_as_continuous_centroids(
                         dataset, r_name, r_id, final_features, W_global, H_global, mappings,
                         valid_spot_ids=valid_spot_ids
                     )
-                    uuid, sha1_hash, spectra_offsets = writer.ibd_write_continuous_spectra(data, final_features[:, 3])
+
+                    print(f"Start writing ccs images for {data_ccs.shape[3]} features...")
+                    ccs_feature_index = 0
+                    for f_index, feature_row in enumerate(final_features):
+                        if slxFileHelper._is_ccs_feature_row(feature_row):
+                            print(data_ccs[:, :, :, ccs_feature_index].shape)
+                            image = sitk.GetImageFromArray(data_ccs[:, :, :, ccs_feature_index].transpose(2, 0, 1))
+                            normalized_name = slxFileHelper.normalize(feature_row[5])  # Assuming name is in the 6th column
+                            oi = set_image_properties(image)
+                            # Write feature properties to NRRD header as custom key-value metadata
+                            oi.SetMetaData("feature_id", str(feature_row[0]))
+                            oi.SetMetaData("feature_mz_low", str(feature_row[1]))
+                            oi.SetMetaData("feature_mz_high", str(feature_row[2]))
+                            oi.SetMetaData("feature_mz_centroid", str(feature_row[6]))
+                            oi.SetMetaData("feature_ccs_low", str(feature_row[3]))
+                            oi.SetMetaData("feature_ccs_high", str(feature_row[4]))
+                            oi.SetMetaData("feature_name", str(feature_row[5]))
+                            # create a folder filename_without_extension / r_name if it does not exist
+                            (filename_without_extension / r_name).mkdir(parents=True, exist_ok=True)
+                            spot_path = f"{str(filename_without_extension / r_name / str(r_name).split('/')[-1])}.{normalized_name}.nrrd"
+                            sitk.WriteImage(oi, spot_path)
+                            print(f"Exported ccs image: {spot_path}")
+                            ccs_feature_index += 1
+                    
+                    
+
+
+                    uuid, sha1_hash, spectra_offsets = writer.ibd_write_continuous_spectra(data, final_features[:, 6]) # Assuming feature names are in the 7th column for centroid mode
                     writer.set_imzML_export_info(uuid, sha1_hash, "continuous", "centroid spectrum")
 
                 # Set spatial information and write the imzML file
