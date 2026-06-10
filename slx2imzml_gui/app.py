@@ -317,7 +317,6 @@ def api_features():
     """Return merged feature details for a list of feature-list IDs."""
     body = request.get_json(force=True)
     ids: list = body.get("ids", [])
-    include_ccs: bool = bool(body.get("include_ccs", True))
 
     cache = STATE["features_cache"]
     all_rows: list[dict] = []
@@ -366,22 +365,18 @@ def api_features():
             row["mz_low"] = _safe_round(mz_lo_raw, 4)
             row["mz_high"] = _safe_round(mz_hi_raw, 4)
             row["mz_width_ppm"] = None
-        if include_ccs:
-            ccs_lo = _safe_round(row.get("ccs_low"), 2) if "ccs_low" in row else None
-            ccs_hi = _safe_round(row.get("ccs_high"), 2) if "ccs_high" in row else None
-            if "ccs_low" in row:
-                row["ccs_low"] = ccs_lo
-            if "ccs_high" in row:
-                row["ccs_high"] = ccs_hi
-            if ccs_lo is not None and ccs_hi is not None:
-                row["ccs_center"] = _safe_round((ccs_lo + ccs_hi) / 2, 2)
-            elif "ccs_low" in row or "ccs_high" in row:
-                row["ccs_center"] = None
-        else:
-            row.pop("ccs_low", None)
-            row.pop("ccs_high", None)
-            row.pop("ccs_center", None)
-
+        
+        ccs_lo = _safe_round(row.get("ccs_low"), 2) if "ccs_low" in row else None
+        ccs_hi = _safe_round(row.get("ccs_high"), 2) if "ccs_high" in row else None
+        if "ccs_low" in row:
+            row["ccs_low"] = ccs_lo
+        if "ccs_high" in row:
+            row["ccs_high"] = ccs_hi
+        if ccs_lo is not None and ccs_hi is not None:
+            row["ccs_center"] = _safe_round((ccs_lo + ccs_hi) / 2, 2)
+        elif "ccs_low" in row or "ccs_high" in row:
+            row["ccs_center"] = None
+        
     all_rows.sort(key=lambda r: (r.get("mz_center") is None, r.get("mz_center") or 0))
     return jsonify({"ok": True, "features": _json_safe(all_rows)})
 
@@ -392,7 +387,7 @@ def api_export():
     body = request.get_json(force=True)
     selected_region_indices: list[int] = body.get("region_indices", [])
     selected_feature_indices: list[int] = body.get("feature_indices", [])
-    include_ccs: bool = bool(body.get("include_ccs", True))
+
     slice_thickness: int = int(body.get("slice_thickness", 10))
 
     path = STATE["slx_path"]
@@ -424,7 +419,6 @@ def api_export():
             "spot_images": None,
             "optical_images": None,
             "featurelists": sel_features,
-            "include_ccs": include_ccs,
             "regions": selected_regions,
             "regions_as_labels": None,
             "labels": None,

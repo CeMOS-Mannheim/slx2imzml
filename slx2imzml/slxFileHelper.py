@@ -87,7 +87,6 @@ class slxFileHelper:
         print(f"Optical Images: {slx_context.get('optical_images', 'N/A')}")
         print(f"Regions: {slx_context.get('regions', 'N/A')}")
         print(f"Feature Lists: {slx_context.get('featurelists', 'N/A')}")
-        print(f"Include CCS: {slx_context.get('include_ccs', True)}")
         print(f"Labels: {slx_context.get('labels', 'N/A')}")
 
     def get_dataset_proxy(self, slx_file) -> sl.DatasetProxy:
@@ -1036,29 +1035,6 @@ class slxFileHelper:
                     ][['id', 'num_features', 'name']].values.tolist()
                 else:
                     self.feature_lists = feature_lists[['id', 'num_features', 'name']].values.tolist()
-
-                # Process features: combine all feature lists and sort by m/z
-                # features = None
-                # mz_offset_step = float(slx_context.get("ccs_mz_offset", 1e-4))
-                # include_ccs = bool(slx_context.get("include_ccs", True))
-                # for f_id, f_count, f_listname in self.feature_lists:
-                #     feature_table = dataset.feature_table.get_features(f_id, mode="area")
-                #     selected_cols = ["id", "mz_low", "mz_high"]
-                #     if include_ccs and "ccs_low" in feature_table.columns:
-                #         selected_cols.append("ccs_low")
-                #     if include_ccs and "ccs_high" in feature_table.columns:
-                #         selected_cols.append("ccs_high")
-                #     feature_data = feature_table[selected_cols]
-                #     if features is None:
-                #         features = feature_data
-                #     else:
-                #         features = pd.concat([features, feature_data], ignore_index=True)
-                
-                # if features is not None:
-                #     final_features = slxFileHelper._build_final_features(features, mz_offset_step=mz_offset_step)
-                #     slx_context["final_features"] = final_features.tolist()
-                # else:
-                #     slx_context["final_features"] = []
 
                 features = None
                 for f_id, f_count, f_listname in self.feature_lists:
