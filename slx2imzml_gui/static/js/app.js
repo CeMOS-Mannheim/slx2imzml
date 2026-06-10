@@ -172,10 +172,8 @@ async function loadFeatureDetails() {
     fdBody.innerHTML = "";
     return;
   }
-  const data = await api("/api/features", {
-    ids,
-    include_ccs: $("includeCCS").checked,
-  });
+
+  const data = await api("/api/features", { ids });
   if (!data.ok) {
     toast("Failed to load feature details: " + (data.error || "Unknown error"), "error");
     return;
@@ -264,11 +262,6 @@ function updateStatus() {
   btnProcess.disabled = !ready;
 }
 
-$("includeCCS").addEventListener("change", () => {
-  if (state.selectedFeatures.size) {
-    loadFeatureDetails();
-  }
-});
 
 // ── Plotly rendering ──────────────────────────────────────────────────────────
 function renderPlot() {
@@ -339,7 +332,6 @@ btnProcess.addEventListener("click", async () => {
     const data = await api("/api/export", {
       region_indices:  regionIndices,
       feature_indices: featureIndices,
-      include_ccs:     $("includeCCS").checked,
       slice_thickness: parseInt($("sliceThickness").value, 10) || 10,
     });
     hideLoading();
