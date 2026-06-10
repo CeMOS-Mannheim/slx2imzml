@@ -150,14 +150,16 @@ class slxFileHelper:
         """Check if a feature row contains finite CCS bounds.
 
         Expected row layout:
-            [id, mz_low, mz_high, ccs_low, ccs_high, mz_centroid, name]
+            [id, name, mz_low, mz_high, ccs_low, ccs_high]
         """
-        if len(feature_row) < 6:
+        if len(feature_row) <= 4:
             return False
-        ccs_low = slxFileHelper._to_float_or_nan(feature_row[3])
-        ccs_high = slxFileHelper._to_float_or_nan(feature_row[4])
-        print(f"Checking CCS feature row: ccs_low={ccs_low}, ccs_high={ccs_high}")
-        return np.isfinite(ccs_low) and np.isfinite(ccs_high)
+        
+        if len(feature_row) == 6:    
+            ccs_low = slxFileHelper._to_float_or_nan(feature_row[4])
+            ccs_high = slxFileHelper._to_float_or_nan(feature_row[5])
+            print(f"Checking CCS feature row: ccs_low={ccs_low}, ccs_high={ccs_high}")
+            return np.isfinite(ccs_low) and np.isfinite(ccs_high)
 
     # @staticmethod
     # def _build_final_features(features_df: pd.DataFrame, mz_offset_step: float = 1e-4) -> np.ndarray:
@@ -285,7 +287,7 @@ class slxFileHelper:
             dataset: SCiLS Lab dataset proxy
             r_name: Name of the region to process
             r_id: ID of the region to process
-            features: Array of features with columns [id, mz_low, mz_high, centroid,, ccs_low, ccs_high, name]
+            features: Array of features with columns [id, name, mz_low, mz_high, centroid, ccs_low, ccs_high]
             W_global: Global grid width
             H_global: Global grid height
             mappings: List of subregion mappings (offsets and shapes)
@@ -320,8 +322,8 @@ class slxFileHelper:
         f_id_ccs = 0
         for f_index, feature_row in enumerate(features):
             f_id = int(feature_row[0])
-            f_mz_low = float(feature_row[1])
-            f_mz_high = float(feature_row[2])
+            f_mz_low = float(feature_row[2])
+            f_mz_high = float(feature_row[3])
 
             # CCS feature path: use per-feature intensities to keep CCS channels separate
             # even if m/z interval is identical.
@@ -1060,7 +1062,11 @@ class slxFileHelper:
 
                 features = None
                 for f_id, f_count, f_listname in self.feature_lists:
-                    feature_data = dataset.feature_table.get_features(f_id,  mode="area")[['id', 'mz_low', 'mz_high', 'ccs_low', 'ccs_high', 'name']]
+                    feature_data = dataset.feature_table.get_features(f_id,  mode="area")
+                    if "ccs_low" in feature_data.columns:
+                        feature_data = feature_data[['id', 'name', 'mz_low', 'mz_high', 'ccs_low', 'ccs_high', ]]
+                    else:
+                        feature_data = feature_data[['id', 'name', 'mz_low', 'mz_high']]
                     if features is None:
                         features = feature_data
                     else:
@@ -1069,14 +1075,11 @@ class slxFileHelper:
                 if features is not None:
                     features = np.array(features)
                     # Calculate centroids as mean of mz_low and mz_high
-                    centroids = np.mean(features[..., 1:3], axis=1)
+                    centroids = np.mean(features[..., 2:4], axis=1)
                     # Sort features by centroid m/z value
                     sorted_indices = np.argsort(centroids)
                     # Combine features with centroids for final export
-                    slx_context["final_features"] = np.concatenate([
-                        features[sorted_indices], 
-                        centroids[sorted_indices][..., np.newaxis]
-                    ], axis=1).tolist()
+                    slx_context["final_features"] = features[sorted_indices].tolist()
                 else:
                     slx_context["final_features"] = []
 

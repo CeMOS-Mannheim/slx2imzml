@@ -235,16 +235,15 @@ def main():
                         if slxFileHelper._is_ccs_feature_row(feature_row):
                             print(data_ccs[:, :, :, ccs_feature_index].shape)
                             image = sitk.GetImageFromArray(data_ccs[:, :, :, ccs_feature_index].transpose(2, 0, 1))
-                            normalized_name = slxFileHelper.normalize(feature_row[5])  # Assuming name is in the 6th column
+                            normalized_name = slxFileHelper.normalize(feature_row[1])  # Assuming name is in the 2nd column
                             oi = set_image_properties(image)
                             # Write feature properties to NRRD header as custom key-value metadata
                             oi.SetMetaData("feature_id", str(feature_row[0]))
-                            oi.SetMetaData("feature_mz_low", str(feature_row[1]))
-                            oi.SetMetaData("feature_mz_high", str(feature_row[2]))
-                            oi.SetMetaData("feature_mz_centroid", str(feature_row[6]))
-                            oi.SetMetaData("feature_ccs_low", str(feature_row[3]))
-                            oi.SetMetaData("feature_ccs_high", str(feature_row[4]))
-                            oi.SetMetaData("feature_name", str(feature_row[5]))
+                            oi.SetMetaData("feature_name", str(feature_row[1]))
+                            oi.SetMetaData("feature_mz_low", str(feature_row[2]))
+                            oi.SetMetaData("feature_mz_high", str(feature_row[3]))
+                            oi.SetMetaData("feature_ccs_low", str(feature_row[4]))
+                            oi.SetMetaData("feature_ccs_high", str(feature_row[5]))
                             # create a folder filename_without_extension / r_name if it does not exist
                             (filename_without_extension / r_name).mkdir(parents=True, exist_ok=True)
                             spot_path = f"{str(filename_without_extension / r_name / str(r_name).split('/')[-1])}.{normalized_name}.nrrd"
@@ -255,7 +254,7 @@ def main():
                     
 
 
-                    uuid, sha1_hash, spectra_offsets = writer.ibd_write_continuous_spectra(data, final_features[:, 6]) # Assuming feature names are in the 7th column for centroid mode
+                    uuid, sha1_hash, spectra_offsets = writer.ibd_write_continuous_spectra(data, (final_features[:, 2].astype(np.float64)+final_features[:, 3].astype(np.float64))*0.5) # Assuming feature names are in the 7th column for centroid mode
                     writer.set_imzML_export_info(uuid, sha1_hash, "continuous", "centroid spectrum")
 
                 # Set spatial information and write the imzML file
