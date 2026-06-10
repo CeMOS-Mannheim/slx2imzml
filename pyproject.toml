@@ -17,26 +17,15 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
+    "flask>=3.0",
     "numpy",
     "pandas",
     "jinja2",
     "SimpleITK",
     "Pillow",
-]
-
-[project.optional-dependencies]
-gui = [
-    "flask>=3.0",
-    "matplotlib",
-    "numpy",
-    "Pillow",
     "plotly",
+    "matplotlib",
 ]
-test = [
-    "pytest>=8.0",
-    "pytest-cov>=5.0",
-]
-
 [project.urls]
 Homepage = "https://github.com/CeMOS-Mannheim/slx2imzml"
 
