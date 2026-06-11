@@ -179,6 +179,29 @@
 
 </main>
 
+<!-- ═══════════════════════════════════════════════════════════════ EXPORT PROGRESS -->
+<div id="exportOverlay" class="export-overlay" style="display:none">
+  <div class="export-panel">
+    <div class="export-panel-header">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      Export in Progress
+    </div>
+    <div class="export-panel-body">
+      <div class="export-progress-track">
+        <div id="exportProgressFill" class="export-progress-fill" style="width:0%"></div>
+      </div>
+      <div id="exportProgressLabel" class="export-progress-label">Starting&hellip;</div>
+      <div class="export-log-wrap">
+        <pre id="exportLog" class="export-log"></pre>
+      </div>
+      <button id="btnExportDone" class="btn btn-primary" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+        Close
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══════════════════════════════════════════════════════════════ TOAST -->
 <div id="toastContainer"></div>
 

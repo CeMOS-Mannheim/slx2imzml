@@ -9,6 +9,7 @@ import io
 import json
 import math
 import os
+import re
 import pathlib
 import socket
 import subprocess
@@ -381,13 +382,23 @@ def api_features():
     return jsonify({"ok": True, "features": _json_safe(all_rows)})
 
 
+# ---------------------------------------------------------------------------
+# SSE streaming export
+# ---------------------------------------------------------------------------
+_PROGRESS_RE = re.compile(r"Progress:\s*([\d.]+)%")
+
+
+def _sse(event: str, data: object) -> str:
+    """Build a Server-Sent Event string."""
+    return f"event: {event}\ndata: {json.dumps(_json_safe(data))}\n\n"
+
+
 @app.post("/api/export")
 def api_export():
-    """Write a JSON config and invoke the slx2imzml exporter."""
+    """Write a JSON config and invoke the slx2imzml exporter with SSE streaming."""
     body = request.get_json(force=True)
     selected_region_indices: list[int] = body.get("region_indices", [])
     selected_feature_indices: list[int] = body.get("feature_indices", [])
-
     slice_thickness: int = int(body.get("slice_thickness", 10))
 
     path = STATE["slx_path"]
@@ -431,16 +442,62 @@ def api_export():
     with open(json_file, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4)
 
-    try:
-        proc = subprocess.run(
+    def _generate():
+        proc = subprocess.Popen(
             [sys.executable, "-m", "slx2imzml", os.path.abspath(json_file)],
-            check=False,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
         )
-        if proc.returncode == 0:
-            return jsonify({"ok": True, "output_dir": os.path.dirname(path)})
-        return jsonify({"ok": False, "error": f"Exporter exited with code {proc.returncode}."}), 500
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        try:
+            yield _sse("status", {"message": "Export started\u2026"})
+
+            remainder = b""
+            while True:
+                chunk = proc.stdout.read(4096)
+                if not chunk:
+                    break
+                data = (remainder + chunk).decode("utf-8", errors="replace")
+                remainder = b""
+
+                # Process character by character to handle \r updates in real-time
+                line_buf = ""
+                for ch in data:
+                    if ch == "\r":
+                        seg = line_buf.strip()
+                        line_buf = ""
+                        if seg:
+                            m = _PROGRESS_RE.search(seg)
+                            if m:
+                                yield _sse("progress", {"percent": float(m.group(1))})
+                            else:
+                                yield _sse("log", {"text": seg})
+                    elif ch == "\n":
+                        seg = line_buf.strip()
+                        line_buf = ""
+                        if seg:
+                            yield _sse("log", {"text": seg})
+                    else:
+                        line_buf += ch
+
+                # Keep any remaining partial data for next chunk
+                if line_buf:
+                    remainder = line_buf.encode("utf-8")
+
+            # Flush remaining buffer after EOF
+            seg = line_buf.strip()
+            if seg:
+                yield _sse("log", {"text": seg})
+
+        finally:
+            proc.stdout.close()
+            proc.wait()
+
+            if proc.returncode == 0:
+                yield _sse("complete", {"output_dir": os.path.dirname(path)})
+            else:
+                yield _sse("error", {"message": f"Exporter exited with code {proc.returncode}"})
+
+    return Response(_generate(), mimetype="text/event-stream")
 
 
 # ---------------------------------------------------------------------------

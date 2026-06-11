@@ -325,6 +325,16 @@ function highlightPlotTraces() {
 }
 
 // ── Export ────────────────────────────────────────────────────────────────────
+const exportOverlay      = $("exportOverlay");
+const exportProgressFill = $("exportProgressFill");
+const exportProgressLabel = $("exportProgressLabel");
+const exportLog          = $("exportLog");
+const btnExportDone      = $("btnExportDone");
+
+btnExportDone.addEventListener("click", () => {
+  exportOverlay.style.display = "none";
+});
+
 btnProcess.addEventListener("click", async () => {
   const regionIndices  = [...state.selectedRegions];
   const featureIndices = [...state.selectedFeatures];
@@ -334,25 +344,114 @@ btnProcess.addEventListener("click", async () => {
     return;
   }
 
-  showLoading("Running export…");
+  showExportUI();
+  appendLog("Starting export\u2026");
+
   try {
-    const data = await api("/api/export", {
-      region_indices:  regionIndices,
-      feature_indices: featureIndices,
-      include_ccs:     $("includeCCS").checked,
-      slice_thickness: parseInt($("sliceThickness").value, 10) || 10,
+    const response = await fetch("/api/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        region_indices:  regionIndices,
+        feature_indices: featureIndices,
+        include_ccs:     $("includeCCS").checked,
+        slice_thickness: parseInt($("sliceThickness").value, 10) || 10,
+      }),
     });
-    hideLoading();
-    if (data.ok) {
-      toast(`Export complete! Files saved to: ${data.output_dir}`, "success", 10000);
-    } else {
-      toast("Export failed: " + data.error, "error", 10000);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // Split on double newline (SSE event boundary)
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() || "";
+
+      for (const part of parts) {
+        if (!part.trim()) continue;
+        const lines = part.split("\n");
+        let eventType = "message";
+        let dataStr = "";
+        for (const line of lines) {
+          if (line.startsWith("event: ")) eventType = line.slice(7).trim();
+          else if (line.startsWith("data: ")) dataStr = line.slice(6);
+        }
+        if (dataStr) {
+          try {
+            const msg = JSON.parse(dataStr);
+            handleExportEvent(eventType, msg);
+          } catch { /* skip malformed JSON */ }
+        }
+      }
     }
   } catch (e) {
-    hideLoading();
-    toast("Export error: " + e.message, "error");
+    appendLog("[ERROR] " + e.message, "log-err");
+    setExportDone(false, e.message);
   }
 });
+
+function showExportUI() {
+  exportOverlay.style.display = "flex";
+  exportProgressFill.style.width = "0%";
+  exportProgressFill.className = "export-progress-fill";
+  exportProgressLabel.textContent = "Starting\u2026";
+  exportLog.innerHTML = "";
+  btnExportDone.style.display = "none";
+}
+
+function handleExportEvent(event, msg) {
+  const data = msg.data || msg;
+  switch (event) {
+    case "status":
+      exportProgressLabel.textContent = data.message || "";
+      appendLog("> " + (data.message || ""), "log-info");
+      break;
+    case "log":
+      appendLog(data.text || "");
+      break;
+    case "progress":
+      if (data.percent != null) {
+        const pct = Math.round(data.percent);
+        exportProgressFill.style.width = pct + "%";
+        exportProgressLabel.textContent = "Processing\u2026 " + pct + "%";
+      }
+      break;
+    case "complete":
+      exportProgressFill.style.width = "100%";
+      exportProgressFill.classList.add("done");
+      exportProgressLabel.textContent = "Export complete!";
+      appendLog("\u2714 Export complete!", "log-progress");
+      btnExportDone.style.display = "";
+      toast("Export complete! Files saved to: " + (data.output_dir || ""), "success", 10000);
+      break;
+    case "error":
+      setExportDone(false, data.message || "Export failed");
+      break;
+  }
+}
+
+function setExportDone(success, msg) {
+  exportProgressFill.classList.add(success ? "done" : "error");
+  exportProgressLabel.textContent = msg;
+  appendLog("\u2716 " + msg, "log-err");
+  btnExportDone.style.display = "";
+  if (!success) toast("Export failed: " + msg, "error", 10000);
+}
+
+function appendLog(text, cls) {
+  const span = document.createElement("span");
+  if (cls) span.className = cls;
+  span.textContent = text;
+  exportLog.appendChild(span);
+  exportLog.appendChild(document.createElement("br"));
+  exportLog.scrollTop = exportLog.scrollHeight;
+}
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function esc(str) {
