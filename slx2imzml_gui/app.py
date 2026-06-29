@@ -359,7 +359,7 @@ def api_features():
             row["mz_center"] = _safe_round(mz_c, 4)
             row["mz_low"] = _safe_round(mz_lo, 4)
             row["mz_high"] = _safe_round(mz_hi, 4)
-            row["mz_width_ppm"] = _safe_round(((mz_hi - mz_lo) / mz_c) * 1e6, 1) if mz_c else None
+            row["mz_width_ppm"] = _safe_round(((mz_hi - mz_c) / mz_c) * 1e6, 1) if mz_c else None
         else:
             row["mz_center"] = None
             row["mz_low"] = _safe_round(mz_lo_raw, 4)
